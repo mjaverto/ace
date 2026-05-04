@@ -4,7 +4,7 @@
 
 <!-- badges -->
 <!-- prettier-ignore-start -->
-[![CI](https://img.shields.io/badge/CI-pending-lightgrey)](https://github.com/mjaverto/ace/actions)
+[![CI](https://github.com/mjaverto/ace/actions/workflows/ci.yml/badge.svg)](https://github.com/mjaverto/ace/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@mjaverto/ace.svg)](https://www.npmjs.com/package/@mjaverto/ace)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![node](https://img.shields.io/badge/node-%3E=20-brightgreen)](https://nodejs.org)
