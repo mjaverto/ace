@@ -1,0 +1,5 @@
+{"type":"session","id":"pi-sess-0002-dddd-eeee-ffff","cwd":"/Users/example/projects/myapp","version":"0.9.1","timestamp":"2026-05-01T10:00:00.000Z"}
+{"type":"model_change","provider":"anthropic","modelId":"claude-opus-4-5","timestamp":"2026-05-01T10:00:01.000Z"}
+{"type":"message","timestamp":"2026-05-01T10:00:05.000Z","message":{"role":"user","content":[{"type":"text","text":"Run the test suite please."}]}}
+{"type":"message","timestamp":"2026-05-01T10:00:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I'll run the test suite for you."},{"type":"toolCall","id":"tc-001","name":"Bash","arguments":{"command":"npm test"}}]}}
+{"type":"message","timestamp":"2026-05-01T10:00:15.000Z","message":{"role":"toolResult","content":[{"type":"toolResult","toolCallId":"tc-001","toolName":"Bash","content":"Error: ENOENT: no such file or directory, open 'package.json'","isError":true}]}}

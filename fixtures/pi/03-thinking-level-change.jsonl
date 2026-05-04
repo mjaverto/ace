@@ -1,0 +1,5 @@
+{"type":"session","id":"pi-sess-0003-gggg-hhhh-iiii","cwd":"/Users/example/projects/myapp","version":"0.9.1","timestamp":"2026-05-01T11:00:00.000Z"}
+{"type":"model_change","provider":"anthropic","modelId":"claude-opus-4-5","timestamp":"2026-05-01T11:00:01.000Z"}
+{"type":"thinking_level_change","thinkingLevel":"high","timestamp":"2026-05-01T11:00:02.000Z"}
+{"type":"message","timestamp":"2026-05-01T11:00:05.000Z","message":{"role":"user","content":[{"type":"text","text":"Explain the tradeoffs between SQL and NoSQL databases."}]}}
+{"type":"message","timestamp":"2026-05-01T11:00:20.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants a comparison of SQL vs NoSQL. I should cover ACID properties, schema flexibility, scalability patterns, and typical use cases.","thinkingSignature":"sig-should-be-dropped"},{"type":"text","text":"Great question. SQL and NoSQL databases each have distinct strengths depending on your workload."}]}}
