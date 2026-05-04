@@ -11,6 +11,10 @@ on:
       - "docs/**"
       - "**/*.md"
       - ".github/ISSUE_TEMPLATE/**"
+  # Allow operator-triggered re-runs from the Actions tab — useful when
+  # auto-trigger gets suppressed (e.g. workflow-self-modification edge cases)
+  # or when we need to force a publish without a code change.
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
