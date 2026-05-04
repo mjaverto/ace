@@ -205,9 +205,20 @@ function renderPart(
     const tp = part as ToolPart;
     const status = (tp.state as Record<string, unknown>)?.["status"] as string | undefined;
 
-    // Only render completed or error states
+    // Handle in-flight states with a visible marker
+    if (status === "pending" || status === "running") {
+      const toolName = tp.tool ?? "unknown";
+      const state = tp.state as Record<string, unknown>;
+      const input = state["input"];
+      const inputStr = input !== undefined ? JSON.stringify(input, null, 2) : "{}";
+      const truncatedInput = truncate(inputStr, truncateOpts.toolInput);
+      const marker = `### Tool call · ${toolName} (in flight)\n\n`;
+      return { text: marker + fence("", truncatedInput), isToolCall: true };
+    }
+
+    // Truly unknown status — surface as fenced JSON
     if (status !== "completed" && status !== "error") {
-      return { text: "", isToolCall: false };
+      return { text: sectionForUnknown(`unknown opencode tool state: ${status}`, part), isToolCall: false };
     }
 
     const toolName = tp.tool ?? "unknown";
@@ -326,7 +337,13 @@ export const opencodeSource: AgentSource = {
       let model: string | undefined;
 
       for (const msg of messages) {
-        const envelope = JSON.parse(msg.data) as MessageEnvelope;
+        let envelope: MessageEnvelope;
+        try {
+          envelope = JSON.parse(msg.data) as MessageEnvelope;
+        } catch {
+          bodyParts.push(sectionForUnknown("corrupt opencode message data", { messageId: msg.id, raw: msg.data }));
+          continue;
+        }
         const role = envelope.role;
 
         if (role !== "user" && role !== "assistant") continue;
@@ -341,7 +358,13 @@ export const opencodeSource: AgentSource = {
         let lastProviderOptions: Record<string, unknown> | undefined;
 
         for (const pRow of partRows) {
-          const partData = JSON.parse(pRow.data) as OpencodePart;
+          let partData: OpencodePart;
+          try {
+            partData = JSON.parse(pRow.data) as OpencodePart;
+          } catch {
+            bodyParts.push(sectionForUnknown("corrupt opencode part data", { messageId: msg.id, raw: pRow.data }));
+            continue;
+          }
 
           // Collect providerOptions from any part for model extraction
           const pd = partData as Record<string, unknown>;
@@ -385,6 +408,8 @@ export const opencodeSource: AgentSource = {
       fm.toolCallCount = toolCallCount;
       fm.aceSchema = 1;
       fm.aceRenderedAt = ctx.now.toISOString();
+      fm.sourcePath = dbPath;
+      fm.sourceMtime = new Date(timeUpdated).toISOString();
 
       fm.x_opencode = {
         projectId,
@@ -447,7 +472,7 @@ async function* generateHandles(
 
       for (const row of rows) {
         const dirSegment = outputDirSegment(row.slug, row.project_id);
-        const outputRelPath = `${dirSegment}/${row.id}.md`;
+        const outputRelPath = `opencode/${dirSegment}/${row.id}.md`;
 
         const payload: OpencodePayload = {
           dbPath,

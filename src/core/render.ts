@@ -14,11 +14,18 @@ import { expandHome } from "../shared/util.js";
 // Report types
 // ---------------------------------------------------------------------------
 
+export interface SourceReportEntry {
+  outPath: string;
+  status: "rendered" | "skipped" | "error";
+  error?: string;
+}
+
 export interface SourceReport {
   sourceName: string;
   rendered: number;
   skipped: number;
   errors: Array<{ id: string; error: string }>;
+  entries: SourceReportEntry[];
 }
 
 export interface RenderReport {
@@ -133,7 +140,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
     const roots = sourceConfig.roots?.length ? sourceConfig.roots : source.defaultRoots(process.env["HOME"] ?? "~");
     const exclude = sourceConfig.exclude ?? [];
 
-    const report: SourceReport = { sourceName: source.name, rendered: 0, skipped: 0, errors: [] };
+    const report: SourceReport = { sourceName: source.name, rendered: 0, skipped: 0, errors: [], entries: [] };
     reports.push(report);
 
     const ctx = {
@@ -181,6 +188,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
 
         if (!render) {
           report.skipped++;
+          report.entries.push({ outPath: absOutPath, status: "skipped" });
           return;
         }
 
@@ -195,16 +203,16 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
           };
           result = await source.render(handle, renderCtx);
         } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
           logger.error(`[runRender] render failed for "${handle.id}":`, err);
-          report.errors.push({
-            id: handle.id,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          report.errors.push({ id: handle.id, error: errMsg });
+          report.entries.push({ outPath: absOutPath, status: "error", error: errMsg });
           return;
         }
 
         if (dryRun) {
           report.rendered++;
+          report.entries.push({ outPath: absOutPath, status: "rendered" });
           logger.info(`[dry-run] would write: ${absOutPath}`);
           return;
         }
@@ -216,11 +224,10 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
         try {
           await atomicWrite(absOutPath, fullContent);
         } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
           logger.error(`[runRender] atomicWrite failed for "${absOutPath}":`, err);
-          report.errors.push({
-            id: handle.id,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          report.errors.push({ id: handle.id, error: errMsg });
+          report.entries.push({ outPath: absOutPath, status: "error", error: errMsg });
           return;
         }
 
@@ -243,6 +250,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
         }
 
         report.rendered++;
+        report.entries.push({ outPath: absOutPath, status: "rendered" });
         logger.info(`[runRender] rendered: ${absOutPath}`);
       })
     );

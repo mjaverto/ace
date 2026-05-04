@@ -58,9 +58,21 @@ export function buildCronLine(opts: CronOptions, aceBin: string): string {
 function readCrontab(): string {
   try {
     return execFileSync("crontab", ["-l"], { encoding: "utf8" });
-  } catch {
-    // crontab -l exits non-zero when no crontab exists
-    return "";
+  } catch (err) {
+    // crontab -l exits 1 with "no crontab for <user>" when the user has no crontab.
+    // Any other failure (crontab not installed, permission denied, etc.) must not
+    // silently proceed — doing so risks clobbering the real crontab.
+    const spawnErr = err as { status?: number; stderr?: string; message?: string };
+    const stderr = spawnErr.stderr ?? "";
+    const status = spawnErr.status;
+    if (status === 1 && /no crontab/i.test(stderr)) {
+      return "";
+    }
+    process.stderr.write(
+      `ace: crontab -l failed unexpectedly (status=${status ?? "?"}): ${stderr || (spawnErr.message ?? String(err))}\n` +
+        `Refusing to write crontab to avoid data loss.\n`
+    );
+    process.exit(2);
   }
 }
 

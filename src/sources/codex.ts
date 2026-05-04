@@ -268,7 +268,8 @@ async function render(
 
             const args = fp.arguments ?? "";
             const pretty = prettyArguments(args);
-            bodyParts.push(toolCallBlock({ name, input: pretty, ts }));
+            const truncatedInput = truncate(pretty, ctx.truncate.toolInput);
+            bodyParts.push(toolCallBlock({ name, input: truncatedInput, ts }));
             toolCallCount++;
             if (ts) endedAt = ts;
             break;
@@ -320,10 +321,11 @@ async function render(
           }
           case "token_count":
           case "agent_reasoning":
-            // silently skip
+            // known-noise subtypes: silently skip
             break;
           default:
-            // silently skip all other event_msg subtypes
+            // truly unknown subtype — surface as fenced JSON for drift visibility
+            bodyParts.push(sectionForUnknown(`unknown event_msg subtype: ${subType}`, em.payload));
             break;
         }
         break;
@@ -374,6 +376,12 @@ async function render(
     if (effort !== undefined) x["effort"] = effort;
     fm["x_codex"] = x;
   }
+
+  // Infra frontmatter keys (mirror claude.ts pattern)
+  fm["aceSchema"] = 1;
+  fm["aceRenderedAt"] = ctx.now.toISOString();
+  fm["sourcePath"] = filePath;
+  fm["sourceMtime"] = new Date(stat.mtimeMs).toISOString();
 
   const titleHeading = title ? heading(1, title) : "";
   const markdown = titleHeading + bodyParts.join("");

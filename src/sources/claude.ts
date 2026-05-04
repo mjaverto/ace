@@ -80,10 +80,10 @@ interface ClaudeJsonlLine {
 const MATCH_RE = /\.claude\/projects\/[^/]+\/[0-9a-f-]+\.jsonl$/;
 
 function outputPathFor(absPath: string, _root: string): string {
-  // <parent-dir-basename>/<uuid>.md
+  // claude/<parent-dir-basename>/<uuid>.md
   const uuidFile = path.basename(absPath, ".jsonl") + ".md";
   const projectSlug = path.basename(path.dirname(absPath));
-  return `${projectSlug}/${uuidFile}`;
+  return `claude/${projectSlug}/${uuidFile}`;
 }
 
 function extractText(content: string | ContentBlock[]): string {
@@ -105,7 +105,11 @@ function toolResultText(content: string | ToolResultContent[]): string {
 // Render blocks
 // ---------------------------------------------------------------------------
 
-function renderBlock(block: ContentBlock, truncateToolOutput: number | false): string {
+function renderBlock(
+  block: ContentBlock,
+  truncateToolOutput: number | false,
+  truncateToolInput: number | false = false
+): string {
   const b = block as Record<string, unknown>;
   const bType = b["type"] as string | undefined;
 
@@ -123,11 +127,15 @@ function renderBlock(block: ContentBlock, truncateToolOutput: number | false): s
     const name = (b["name"] as string | undefined) ?? "unknown";
     const input = (b["input"] as unknown) ?? {};
     const inputStr = JSON.stringify(input, null, 2);
-    return toolCallBlock({ name, input: inputStr });
+    const truncatedInputStr = truncate(inputStr, truncateToolInput);
+    return toolCallBlock({ name, input: truncatedInputStr });
   }
 
   if (bType === "tool_result") {
-    const rawContent = (b["content"] as string | ToolResultContent[] | undefined) ?? "";
+    const rawContent = b["content"];
+    if (typeof rawContent !== "string" && !Array.isArray(rawContent)) {
+      return sectionForUnknown("tool_result drift", rawContent);
+    }
     const outputRaw = toolResultText(rawContent as string | ToolResultContent[]);
     const truncated = truncate(outputRaw, truncateToolOutput);
     const wasTruncated =
@@ -149,7 +157,8 @@ function renderBlock(block: ContentBlock, truncateToolOutput: number | false): s
 function renderContent(
   content: string | ContentBlock[],
   truncateToolOutput: number | false,
-  toolCallCountRef: { count: number }
+  toolCallCountRef: { count: number },
+  truncateToolInput: number | false = false
 ): string {
   if (typeof content === "string") {
     return content + "\n\n";
@@ -161,7 +170,7 @@ function renderContent(
     if (b["type"] === "tool_use") {
       toolCallCountRef.count++;
     }
-    out += renderBlock(block, truncateToolOutput);
+    out += renderBlock(block, truncateToolOutput, truncateToolInput);
   }
   return out;
 }
@@ -260,7 +269,7 @@ export const claudeSource: AgentSource = {
       // Render message content
       if (row.message?.content !== undefined) {
         bodyParts.push(
-          renderContent(row.message.content, ctx.truncate.toolOutput, toolCallCountRef)
+          renderContent(row.message.content, ctx.truncate.toolOutput, toolCallCountRef, ctx.truncate.toolInput)
         );
       }
     }

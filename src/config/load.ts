@@ -117,26 +117,43 @@ export async function loadConfig(configPath?: string): Promise<AceConfig> {
 
     for (const candidate of LOCAL_CANDIDATES) {
       const full = path.join(cwd, candidate);
+      let accessible = false;
       try {
         await fs.access(full);
-        raw = await loadRawConfig(full);
-        found = true;
-        break;
+        accessible = true;
       } catch {
         // not found, try next
+      }
+      if (accessible) {
+        // File exists — parse must succeed or we propagate the error with path context
+        try {
+          raw = await loadRawConfig(full);
+        } catch (err) {
+          throw new Error(`[loadConfig] Failed to parse config file "${full}": ${(err as Error).message}`);
+        }
+        found = true;
+        break;
       }
     }
 
     if (!found) {
       // Try XDG candidates
       for (const candidate of xdgCandidates()) {
+        let accessible = false;
         try {
           await fs.access(candidate);
-          raw = await loadRawConfig(candidate);
-          found = true;
-          break;
+          accessible = true;
         } catch {
           // not found, try next
+        }
+        if (accessible) {
+          try {
+            raw = await loadRawConfig(candidate);
+          } catch (err) {
+            throw new Error(`[loadConfig] Failed to parse config file "${candidate}": ${(err as Error).message}`);
+          }
+          found = true;
+          break;
         }
       }
     }
