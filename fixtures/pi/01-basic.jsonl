@@ -1,0 +1,4 @@
+{"type":"session","id":"pi-sess-0001-aaaa-bbbb-cccc","cwd":"/Users/example/projects/myapp","version":"0.9.1","timestamp":"2026-05-01T09:00:00.000Z"}
+{"type":"model_change","provider":"anthropic","modelId":"claude-opus-4-5","timestamp":"2026-05-01T09:00:01.000Z"}
+{"type":"message","timestamp":"2026-05-01T09:00:05.000Z","message":{"role":"user","content":[{"type":"text","text":"What is the current directory structure?"}]}}
+{"type":"message","timestamp":"2026-05-01T09:00:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I can help you understand the directory structure of your project. Let me describe what I see."}]}}
