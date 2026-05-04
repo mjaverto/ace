@@ -1,0 +1,3 @@
+{"type":"user","sessionId":"d4e5f6a7-b8c9-0123-defa-456789012345","cwd":"/Users/example/project","gitBranch":"main","version":"1.2.3","timestamp":"2026-05-01T13:00:00.000Z","message":{"role":"user","content":"Hello, can you help me?"}}
+{this is not valid json at all
+{"type":"assistant","sessionId":"d4e5f6a7-b8c9-0123-defa-456789012345","cwd":"/Users/example/project","gitBranch":"main","version":"1.2.3","timestamp":"2026-05-01T13:00:03.000Z","message":{"role":"assistant","model":"claude-opus-4-5","content":"Of course! I am here to help. What do you need?"}}
