@@ -242,7 +242,9 @@ const renderOneCmd = defineCommand({
         mtimeMs: stat.mtimeMs,
         sizeBytes: stat.size,
         outputRelPath: path.basename(inputPath, ".jsonl"),
-        payload: inputPath,
+        // All JSONL sources (claude, codex, pi) expect payload.filePath; opencode
+        // is already blocked above with an early-exit message.
+        payload: { filePath: inputPath },
       };
 
       const result = await source.render(handle, {

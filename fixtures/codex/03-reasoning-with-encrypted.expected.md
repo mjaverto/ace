@@ -7,10 +7,15 @@ endedAt: 2026-05-02T16:00:12Z
 cwd: /Users/alice/projects/payments
 model: o1-codex
 gitBranch: main
+version: 0.4.2
 messageCount: 2
 toolCallCount: 0
 aceSchema: 1
+aceRenderedAt: <RUNTIME>
+sourcePath: <RUNTIME>
+sourceMtime: <RUNTIME>
 x_codex:
+  originator: user
   effort: high
 ---
 

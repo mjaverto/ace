@@ -10,14 +10,13 @@ messageCount: 2
 toolCallCount: 1
 aceSchema: 1
 aceRenderedAt: <aceRenderedAt>
+sourcePath: <dbPath>
+sourceMtime: <sourceMtime>
 x_opencode:
   projectId: proj_tool_error
   slug: tool-error-project
   directory: /home/user/tool-error-project
   version: 0.3.1
-  summaryFiles: null
-  summaryAdditions: null
-  summaryDeletions: null
   dbPath: <dbPath>
 ---
 # Tool Error Session
