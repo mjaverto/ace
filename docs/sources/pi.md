@@ -1,6 +1,6 @@
-# Source: Block Pi
+# Source: pi (pi-mono)
 
-[Block's Pi agent](https://block.github.io/goose/) (Goose's successor) writes flat-event JSONL under a per-workspace directory.
+[pi-mono](https://github.com/badlogic/pi-mono) (by [@badlogic](https://github.com/badlogic)) writes flat-event JSONL under a per-workspace directory.
 
 ## Where it lives
 
@@ -12,7 +12,7 @@
 
 `<workspace>` is a slug derived from the project root the session was started from. `<ts>_<uuid>` is the local-time start timestamp + a random session id.
 
-`~/.pi/orchestrator/runs/*.md` are plan artifacts (already Markdown, not conversations) — not rendered. If you want them, point a custom plugin at that root.
+If pi-mono ever writes companion artifacts under sibling directories (e.g. plan-only Markdown), they're not rendered by ace's default match. Point a custom plugin at that root if you want them.
 
 ## Schema (per line)
 
@@ -22,7 +22,8 @@ Pi uses a flat per-event schema. `type` is the discriminator:
 - `model_change` — `provider`, `model`.
 - `thinking_level_change` — `thinkingLevel`.
 - `message` — the conversation. `message.role` ∈ `user` / `assistant` / `toolResult`.
-- _everything else_ — silently skipped (telemetry, heartbeat, …).
+- _unknown top-level types_ — silently skipped (telemetry, heartbeat, …).
+- _unknown `message.role` values_ — surfaced as a fenced JSON block (drift visibility).
 
 User/assistant `message` events carry `message.content[]` blocks of type `text`, `thinking` (with a `thinkingSignature` blob ace ignores), or `toolCall` (camelCase; `arguments` is already a parsed object — no JSON re-parse).
 

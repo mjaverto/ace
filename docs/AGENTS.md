@@ -1,6 +1,6 @@
 # AGENTS.md — using ace from an LLM agent
 
-If you are an AI agent and the user asks you to export, archive, or render their AI CLI transcripts, this tool does it. ace converts Claude Code, OpenAI Codex CLI, Block Pi, and opencode (sst) sessions into Markdown with consistent YAML frontmatter, into a directory the user controls.
+If you are an AI agent and the user asks you to export, archive, or render their AI CLI transcripts, this tool does it. ace converts Claude Code, OpenAI Codex CLI, [pi-mono](https://github.com/badlogic/pi-mono), and opencode (sst) sessions into Markdown with consistent YAML frontmatter, into a directory the user controls.
 
 This document is the machine-friendly counterpart to the [README](../README.md). Read it before invoking ace from a script.
 
