@@ -10,14 +10,13 @@ messageCount: 2
 toolCallCount: 0
 aceSchema: 1
 aceRenderedAt: <aceRenderedAt>
+sourcePath: <dbPath>
+sourceMtime: <sourceMtime>
 x_opencode:
   projectId: proj_reasoning
   slug: reasoning-project
   directory: /home/user/reasoning-project
   version: 0.3.1
-  summaryFiles: null
-  summaryAdditions: null
-  summaryDeletions: null
   dbPath: <dbPath>
 ---
 # Reasoning Session

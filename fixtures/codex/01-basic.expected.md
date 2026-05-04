@@ -11,6 +11,9 @@ version: 0.4.2
 messageCount: 2
 toolCallCount: 0
 aceSchema: 1
+aceRenderedAt: <RUNTIME>
+sourcePath: <RUNTIME>
+sourceMtime: <RUNTIME>
 x_codex:
   originator: user
   instructions: You are a helpful coding assistant.

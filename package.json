@@ -47,11 +47,16 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "pretest:integration": "npm run build",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "release": "changeset publish",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "execa": "^9",
