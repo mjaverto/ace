@@ -52,6 +52,7 @@
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "execa": "^9",
     "tsup": "^8",
@@ -59,6 +60,7 @@
     "vitest": "^2"
   },
   "dependencies": {
+    "better-sqlite3": "^12.9.0",
     "citty": "^0.1.6",
     "yaml": "^2.5",
     "zod": "^3.23"
