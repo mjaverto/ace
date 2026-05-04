@@ -1,0 +1,5 @@
+{"timestamp":"2026-05-02T14:11:08Z","type":"session_meta","payload":{"id":"a1b2c3d4-0001-4000-8000-000000000001","cwd":"/Users/alice/projects/todo-app","cli_version":"0.4.2","originator":"user","instructions":"You are a helpful coding assistant.","git":{"commit_hash":"abc1234","branch":"main"}}}
+{"timestamp":"2026-05-02T14:11:10Z","type":"turn_context","payload":{"model":"codex-mini","effort":"medium"}}
+{"timestamp":"2026-05-02T14:11:12Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"What does the main function do in this project?"}]}}
+{"timestamp":"2026-05-02T14:11:15Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The main function initializes the Express server, registers middleware, mounts routes, and starts listening on the configured port."}]}}
+{"timestamp":"2026-05-02T14:11:17Z","type":"event_msg","payload":{"type":"token_count","prompt_tokens":120,"completion_tokens":38}}

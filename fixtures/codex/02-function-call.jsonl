@@ -1,0 +1,6 @@
+{"timestamp":"2026-05-02T15:00:00Z","type":"session_meta","payload":{"id":"a1b2c3d4-0002-4000-8000-000000000002","cwd":"/Users/alice/projects/api-service","cli_version":"0.4.2","originator":"user","instructions":"You are a coding assistant working on a Node.js API.","git":{"commit_hash":"def5678","branch":"feature/add-auth"}}}
+{"timestamp":"2026-05-02T15:00:02Z","type":"turn_context","payload":{"model":"codex-mini","effort":"high"}}
+{"timestamp":"2026-05-02T15:00:04Z","type":"event_msg","payload":{"type":"user_message","message":"List the files in the src directory."}}
+{"timestamp":"2026-05-02T15:00:06Z","type":"response_item","payload":{"type":"function_call","call_id":"call_abc001","name":"Bash","arguments":"{\"command\":\"ls src/\"}"}}
+{"timestamp":"2026-05-02T15:00:07Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_abc001","output":"index.ts\nroutes.ts\nmiddleware.ts\ndb.ts\n"}}
+{"timestamp":"2026-05-02T15:00:09Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The src directory contains: index.ts, routes.ts, middleware.ts, and db.ts."}]}}
