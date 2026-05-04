@@ -1,6 +1,6 @@
 {
   "name": "@mjaverto/ace",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent Conversation Exporter — render Claude Code, Codex, Pi, opencode transcripts to Markdown",
   "type": "module",
   "bin": {
