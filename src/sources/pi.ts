@@ -119,7 +119,8 @@ function extractFirstUserText(content: PiContentBlock[]): string {
 function renderPiBlock(
   block: PiContentBlock,
   _truncateToolOutput: number | false,
-  toolCallCountRef: { count: number }
+  toolCallCountRef: { count: number },
+  truncateToolInput: number | false = false
 ): string {
   const b = block as Record<string, unknown>;
   const bType = b["type"] as string | undefined;
@@ -141,7 +142,8 @@ function renderPiBlock(
     // arguments is already an object — no JSON.parse needed
     const args = (b["arguments"] as unknown) ?? {};
     const inputStr = JSON.stringify(args, null, 2);
-    return toolCallBlock({ name, input: inputStr });
+    const truncatedInputStr = truncate(inputStr, truncateToolInput);
+    return toolCallBlock({ name, input: truncatedInputStr });
   }
 
   // Unknown block type — surface as fenced JSON for drift visibility
@@ -152,11 +154,12 @@ function renderPiBlock(
 function renderPiContent(
   content: PiContentBlock[],
   truncateToolOutput: number | false,
-  toolCallCountRef: { count: number }
+  toolCallCountRef: { count: number },
+  truncateToolInput: number | false = false
 ): string {
   let out = "";
   for (const block of content) {
-    out += renderPiBlock(block, truncateToolOutput, toolCallCountRef);
+    out += renderPiBlock(block, truncateToolOutput, toolCallCountRef, truncateToolInput);
   }
   return out;
 }
@@ -263,7 +266,7 @@ export const piSource: AgentSource = {
 
           const roleLabel = role === "user" ? "User" : "Assistant";
           bodyParts.push(roleHeading(roleLabel, ts));
-          bodyParts.push(renderPiContent(content, ctx.truncate.toolOutput, toolCallCountRef));
+          bodyParts.push(renderPiContent(content, ctx.truncate.toolOutput, toolCallCountRef, ctx.truncate.toolInput));
           continue;
         }
 
@@ -293,7 +296,8 @@ export const piSource: AgentSource = {
           continue;
         }
 
-        // Unknown role — silently skip
+        // Unknown role — surface as fenced JSON for drift visibility
+        bodyParts.push(sectionForUnknown(`unknown pi message role: ${role}`, ev.message));
         continue;
       }
 

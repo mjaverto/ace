@@ -23,11 +23,38 @@ const CANONICAL_KEYS: (keyof Frontmatter)[] = [
 ];
 
 /**
+ * Recursively strip null/undefined from plain objects and arrays.
+ * Does NOT recurse into class instances (only plain objects where
+ * Object.getPrototypeOf(v) === Object.prototype).
+ */
+function scrubNulls(v: unknown): unknown {
+  if (v === null || v === undefined) return undefined;
+  if (v instanceof Date) return v;
+  if (Array.isArray(v)) {
+    return v
+      .map(scrubNulls)
+      .filter((item) => item !== undefined);
+  }
+  if (Object.getPrototypeOf(v) === Object.prototype) {
+    const result: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      const scrubbed = scrubNulls(val);
+      if (scrubbed !== undefined) {
+        result[k] = scrubbed;
+      }
+    }
+    return result;
+  }
+  return v;
+}
+
+/**
  * Serialize a Frontmatter object to a YAML front-matter block.
  *
  * Rules:
  *  - Keys are emitted in canonical order, then `x_*` extras, then any others.
- *  - Keys whose value is `undefined` or `null` are omitted.
+ *  - Keys whose value is `undefined` or `null` are omitted (recursively for
+ *    nested plain objects and arrays).
  *  - `aceSchema` is always forced to `1`.
  *  - Date values are emitted as ISO-8601 strings.
  */
@@ -36,7 +63,8 @@ export function serializeFrontmatter(fm: Frontmatter): string {
 
   function set(k: string, v: unknown): void {
     if (v === undefined || v === null) return;
-    out[k] = v instanceof Date ? v.toISOString() : v;
+    const cleaned = scrubNulls(v instanceof Date ? v.toISOString() : v);
+    if (cleaned !== undefined) out[k] = cleaned;
   }
 
   // 1. Canonical keys in order

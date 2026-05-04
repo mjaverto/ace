@@ -120,33 +120,14 @@ const renderCmd = defineCommand({
 
     if (args.json) {
       for (const s of report.sources) {
-        for (const e of s.errors) {
-          process.stdout.write(
-            JSON.stringify({
-              source: s.sourceName,
-              outPath: null,
-              status: "error",
-              error: e.error,
-            }) + "\n"
-          );
-        }
-        for (let i = 0; i < s.rendered; i++) {
-          process.stdout.write(
-            JSON.stringify({
-              source: s.sourceName,
-              outPath: null,
-              status: "rendered",
-            }) + "\n"
-          );
-        }
-        for (let i = 0; i < s.skipped; i++) {
-          process.stdout.write(
-            JSON.stringify({
-              source: s.sourceName,
-              outPath: null,
-              status: "skipped",
-            }) + "\n"
-          );
+        for (const entry of s.entries) {
+          const rec: Record<string, unknown> = {
+            source: s.sourceName,
+            outPath: entry.outPath,
+            status: entry.status,
+          };
+          if (entry.error !== undefined) rec["error"] = entry.error;
+          process.stdout.write(JSON.stringify(rec) + "\n");
         }
       }
     } else {
@@ -190,12 +171,27 @@ const renderOneCmd = defineCommand({
   async run({ args }) {
     const inputArg = (args._ as unknown as string | undefined) ?? "-";
 
-    if (!args.source) {
-      process.stderr.write("ace render-one: --source <name> is required\n");
-      process.exit(1);
+    const registry = createDefaultRegistry();
+
+    // Require --source for stdin; auto-detect from path otherwise
+    let sourceName = args.source as string | undefined;
+    if (!sourceName) {
+      if (inputArg === "-") {
+        process.stderr.write("ace render-one: --source <name> is required when reading from stdin\n");
+        process.exit(1);
+      }
+      const absInput = path.resolve(inputArg);
+      const matched = await registry.match(absInput);
+      if (!matched) {
+        process.stderr.write(
+          `ace render-one: could not auto-detect source for "${inputArg}". Use --source <name>.\n`
+        );
+        process.exit(4);
+      }
+      sourceName = matched.name;
     }
 
-    if (args.source === "opencode") {
+    if (sourceName === "opencode") {
       process.stderr.write(
         "ace render-one: opencode reads from a SQLite database — " +
           "use `ace render --source opencode` instead.\n"
@@ -203,11 +199,10 @@ const renderOneCmd = defineCommand({
       process.exit(1);
     }
 
-    const registry = createDefaultRegistry();
-    const source = registry.get(args.source);
+    const source = registry.get(sourceName);
     if (!source) {
       process.stderr.write(
-        `ace render-one: unknown source "${args.source}"\n`
+        `ace render-one: unknown source "${sourceName}"\n`
       );
       process.exit(4);
     }
