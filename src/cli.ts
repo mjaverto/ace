@@ -63,7 +63,7 @@ const renderCmd = defineCommand({
   meta: { name: "render", description: "Render all configured sources to Markdown" },
   args: {
     config: { type: "string", description: "Path to config file" },
-    source: { type: "string", description: "Restrict to a specific source" },
+    source: { type: "string", description: "Filter to one or more sources by name (repeatable: --source claude --source codex)" },
     out: { type: "string", description: "Override output directory" },
     "dry-run": { type: "boolean", description: "Preview without writing", default: false },
     force: { type: "boolean", description: "Ignore incremental cache", default: false },
@@ -114,7 +114,7 @@ const renderCmd = defineCommand({
       ...(strat === "mtime" || strat === "index"
         ? { strategyOverride: strat }
         : {}),
-      ...(sources.length === 1 ? { sourceFilter: sources[0] } : {}),
+      ...(sources.length > 0 ? { sourceFilter: sources } : {}),
       ...(concurrency !== undefined ? { concurrency } : {}),
     });
 

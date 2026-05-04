@@ -58,9 +58,12 @@ function buildScheduleXml(opts: LaunchdOptions): string {
   throw new Error("Must specify one of: --at, --every, --cron-minute");
 }
 
-export function buildPlist(opts: LaunchdOptions, aceBin: string): string {
+export function buildPlist(opts: LaunchdOptions, aceBinTokens: string[]): string {
   const logPath = resolveLogPath(opts.logPath);
   const schedule = buildScheduleXml(opts);
+  const programArgs = [...aceBinTokens, "render"]
+    .map((t) => `\t\t<string>${t}</string>`)
+    .join("\n");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -70,8 +73,7 @@ export function buildPlist(opts: LaunchdOptions, aceBin: string): string {
 \t<string>${opts.label}</string>
 \t<key>ProgramArguments</key>
 \t<array>
-\t\t<string>${aceBin}</string>
-\t\t<string>render</string>
+${programArgs}
 \t</array>
 ${schedule}
 \t<key>StandardOutPath</key>
@@ -98,8 +100,8 @@ function uid(): number {
 }
 
 export async function installLaunchd(opts: LaunchdOptions): Promise<void> {
-  const aceBin = resolveAceBin();
-  const plist = buildPlist(opts, aceBin);
+  const aceBinTokens = resolveAceBin();
+  const plist = buildPlist(opts, aceBinTokens);
   const dest = plistPath(opts.label);
   const svc = `gui/${uid()}/${opts.label}`;
 

@@ -47,8 +47,8 @@ export interface RunRenderOptions {
   dryRun?: boolean;
   force?: boolean;
   strategyOverride?: "mtime" | "index";
-  /** Restrict to a single source by name. */
-  sourceFilter?: string;
+  /** Restrict to one or more sources by name. */
+  sourceFilter?: string | string[];
   /** Override concurrency from config. */
   concurrency?: number;
 }
@@ -120,17 +120,28 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
     indexState = await loadIndex(outputRoot);
   }
 
+  // Normalize sourceFilter to a string[] (empty = no filter)
+  const filterNames: string[] =
+    sourceFilter === undefined
+      ? []
+      : Array.isArray(sourceFilter)
+        ? sourceFilter
+        : [sourceFilter];
+
   // Resolve sources
   const allSources = registry.list();
-  const sources = sourceFilter
-    ? allSources.filter((s) => s.name === sourceFilter)
-    : allSources.filter((s) => {
-        const sc = config.sources[s.name];
-        return sc?.enabled !== false;
-      });
+  const sources =
+    filterNames.length > 0
+      ? allSources.filter((s) => filterNames.includes(s.name))
+      : allSources.filter((s) => {
+          const sc = config.sources[s.name];
+          return sc?.enabled !== false;
+        });
 
-  if (sourceFilter && sources.length === 0) {
-    throw new Error(`[runRender] Source not found: "${sourceFilter}"`);
+  if (filterNames.length > 0 && sources.length === 0) {
+    throw new Error(
+      `[runRender] No matching sources for filter: ${filterNames.map((n) => `"${n}"`).join(", ")}`
+    );
   }
 
   const reports: SourceReport[] = [];

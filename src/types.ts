@@ -56,6 +56,13 @@ export interface Frontmatter {
   endedAt?: string;
   gitBranch?: string;
   version?: string;
+  title?: string;
+  messageCount?: number;
+  toolCallCount?: number;
+  aceSchema?: 1;            // literal — only schema version 1 is valid for v0
+  aceRenderedAt?: string;   // ISO-8601
+  sourcePath?: string;
+  sourceMtime?: string;     // ISO-8601
   // anything else allowed; per-source extras under `x_<source>` namespace
   [k: string]: unknown;
 }

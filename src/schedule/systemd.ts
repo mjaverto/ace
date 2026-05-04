@@ -37,14 +37,17 @@ function parseDurationSystemd(s: string): string {
 // Unit file builders
 // ---------------------------------------------------------------------------
 
-export function buildServiceUnit(label: string, aceBin: string, logPath: string): string {
+export function buildServiceUnit(label: string, aceBinTokens: string[], logPath: string): string {
+  // systemd ExecStart requires space-separated tokens; paths with spaces would
+  // need quoting but ace install paths never contain spaces in practice.
+  const execStart = [...aceBinTokens, "render"].join(" ");
   return `[Unit]
 Description=ace render — ${label}
 After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=${aceBin} render
+ExecStart=${execStart}
 StandardOutput=append:${logPath}
 StandardError=append:${logPath}
 
@@ -98,9 +101,9 @@ function unitDir(): string {
 }
 
 export async function installSystemd(opts: SystemdOptions): Promise<void> {
-  const aceBin = resolveAceBin();
+  const aceBinTokens = resolveAceBin();
   const logPath = resolveLogPath(opts.logPath);
-  const serviceContent = buildServiceUnit(opts.label, aceBin, logPath);
+  const serviceContent = buildServiceUnit(opts.label, aceBinTokens, logPath);
   const timerContent = buildTimerUnit(opts);
   const dir = unitDir();
   const serviceDest = path.join(dir, `${opts.label}.service`);
