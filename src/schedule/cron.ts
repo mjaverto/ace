@@ -44,11 +44,15 @@ function buildCronExpr(opts: CronOptions): string {
 // Build the full cron line
 // ---------------------------------------------------------------------------
 
-export function buildCronLine(opts: CronOptions, aceBin: string): string {
+export function buildCronLine(opts: CronOptions, aceBinTokens: string[]): string {
   const expr = buildCronExpr(opts);
   const tag = `${TAG_PREFIX}${opts.label}`;
   const logRedirect = opts.logPath ? ` >> "${opts.logPath}" 2>&1` : "";
-  return `${expr} ${aceBin} render${logRedirect} ${tag}`;
+  // Join argv tokens with spaces; cron runs via /bin/sh so this is fine for
+  // typical paths. Paths with spaces would need quoting, but install paths
+  // for npm globals / node never contain spaces in practice.
+  const binCmd = aceBinTokens.join(" ");
+  return `${expr} ${binCmd} render${logRedirect} ${tag}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,9 +98,9 @@ function writeCrontab(content: string): void {
 // ---------------------------------------------------------------------------
 
 export function installCron(opts: CronOptions): void {
-  const aceBin = resolveAceBin();
+  const aceBinTokens = resolveAceBin();
   const tag = `${TAG_PREFIX}${opts.label}`;
-  const newLine = buildCronLine(opts, aceBin);
+  const newLine = buildCronLine(opts, aceBinTokens);
 
   if (opts.dryRun) {
     console.log("# Cron entry that would be added:");

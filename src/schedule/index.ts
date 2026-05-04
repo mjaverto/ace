@@ -1,35 +1,71 @@
 // src/schedule/index.ts — platform dispatch + shared helpers
 
 import path from "node:path";
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
-// resolveAceBin — returns the absolute path to the `ace` binary.
+// resolveAceBin — returns argv tokens for the `ace` binary as string[].
 //
 // Resolution order:
-//  1. If ACE_BIN env var is set, use it (useful in tests).
-//  2. If process.argv[1] looks like a dist/cli.js path, infer the installed
-//     `ace` bin from the same directory as node (the .bin symlink).
-//  3. Fall back to "node <argv1>" so it still runs from dev.
+//  1. ACE_BIN env var — if set and points to an existing file, use it.
+//  2. Candidate path.join(nodeDir, "ace") — if it exists on disk, use it.
+//  3. `which ace` — if it resolves to an existing file, use it.
+//  4. node <argv1> fallback — for npx / dev runs where no bin symlink exists.
+//  5. Throw with actionable message if nothing works.
+//
+// Returns string[] (always >= 1 token) so callers can spread into
+// ProgramArguments arrays or join for ExecStart strings.
 // ---------------------------------------------------------------------------
 
-export function resolveAceBin(): string {
-  if (process.env["ACE_BIN"]) {
-    return process.env["ACE_BIN"];
-  }
-
-  // In production (after `npm install -g` or `npx`), process.argv[1] is the
-  // cli entrypoint. Check whether there's an `ace` symlink alongside node.
+export function resolveAceBin(): string[] {
   const argv1 = process.argv[1] ?? "";
-  const nodeDir = path.dirname(process.execPath);
-  const aceBinPath = path.join(nodeDir, "ace");
 
-  // If argv1 lives in a dist directory, the installed bin should exist nearby.
-  if (argv1.includes("dist/cli") || argv1.includes("dist\\cli")) {
-    return aceBinPath;
+  // 1. ACE_BIN env override
+  const envBin = process.env["ACE_BIN"];
+  if (envBin) {
+    if (!fs.existsSync(envBin)) {
+      throw new Error(
+        `ACE_BIN is set to "${envBin}" but that file does not exist. ` +
+          `Unset ACE_BIN or point it at the real ace binary.`
+      );
+    }
+    return [envBin];
   }
 
-  // Dev fallback: run via node directly
-  return `${process.execPath} ${argv1}`;
+  // 2. Candidate alongside node (standard npm install -g layout)
+  const nodeDir = path.dirname(process.execPath);
+  const candidate = path.join(nodeDir, "ace");
+  if (fs.existsSync(candidate)) {
+    return [candidate];
+  }
+
+  // 3. which ace
+  try {
+    const whichOut = execFileSync("which", ["ace"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+    }).trim();
+    if (whichOut && fs.existsSync(whichOut)) {
+      return [whichOut];
+    }
+  } catch {
+    // which not available or ace not on PATH — fall through
+  }
+
+  // 4. node <argv1> — works for `npx ace` and dev runs
+  if (argv1) {
+    return [process.execPath, argv1];
+  }
+
+  // 5. Nothing worked
+  throw new Error(
+    `Could not locate the ace binary.\n` +
+      `Options:\n` +
+      `  • Install globally:          npm install -g @mjaverto/ace\n` +
+      `  • Set the binary explicitly: ACE_BIN=/path/to/ace ace install ...\n` +
+      `  • Pass a custom label:       ace install launchd --label dev.ace.render`
+  );
 }
 
 // ---------------------------------------------------------------------------
