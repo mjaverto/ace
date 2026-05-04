@@ -27,6 +27,10 @@
     "LICENSE"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/mjaverto/ace.git"
