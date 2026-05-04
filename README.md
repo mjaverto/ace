@@ -20,7 +20,7 @@ npx @mjaverto/ace render
 
 ## Why ace
 
-Every AI-agent CLI stores its transcripts in a different blob: Claude Code uses one JSONL per session under `~/.claude/projects/`, OpenAI's Codex CLI rolls its own JSONL under `~/.codex/sessions/`, Block's Pi writes flat-event JSONL under `~/.pi/agent/sessions/`, and opencode (sst) keeps everything in a SQLite database at `~/.local/share/opencode/opencode.db`. Each shape is sensible for the tool that wrote it; none of them are ergonomic for *you*, the human or agent who wants to grep, index, embed, or read those conversations later.
+Every AI-agent CLI stores its transcripts in a different blob: Claude Code uses one JSONL per session under `~/.claude/projects/`, OpenAI's Codex CLI rolls its own JSONL under `~/.codex/sessions/`, [pi-mono](https://github.com/badlogic/pi-mono) writes flat-event JSONL under `~/.pi/agent/sessions/`, and opencode (sst) keeps everything in a SQLite database at `~/.local/share/opencode/opencode.db`. Each shape is sensible for the tool that wrote it; none of them are ergonomic for *you*, the human or agent who wants to grep, index, embed, or read those conversations later.
 
 `ace` converts all of them into clean Markdown with consistent YAML frontmatter, into one output directory you control. Once everything is Markdown, the rest of the toolchain just works — drop the output into a [QMD](https://github.com/tobi/qmd)-style indexed vault, sync it to a Drive folder, feed it to embeddings, or scroll through `glow` like any other notes directory. ace owns the conversion pipeline. What you do with the rendered Markdown is your problem (and the entire point).
 
@@ -30,7 +30,7 @@ Every AI-agent CLI stores its transcripts in a different blob: Claude Code uses 
 | ---------------- | :----: | ------------------------------------------------------------------------ | -------------------- |
 | Claude Code      |   v   | `~/.claude/projects/<slug>/<uuid>.jsonl`                                 | Anthropic CLI        |
 | OpenAI Codex CLI |   v   | `~/.codex/{sessions,archived_sessions}/...rollout-*.jsonl`               | rollout JSONL        |
-| Block Pi         |   v   | `~/.pi/agent/sessions/<workspace>/<ts>_<uuid>.jsonl`                     | Goose/Pi             |
+| pi (pi-mono)     |   v   | `~/.pi/agent/sessions/<workspace>/<ts>_<uuid>.jsonl`                     | [badlogic/pi-mono](https://github.com/badlogic/pi-mono) |
 | opencode (sst)   |   v   | `~/.local/share/opencode/opencode.db` (SQLite)                           | Read-only access     |
 
 Per-source schema notes: [`docs/sources/claude.md`](docs/sources/claude.md) · [`docs/sources/codex.md`](docs/sources/codex.md) · [`docs/sources/pi.md`](docs/sources/pi.md) · [`docs/sources/opencode.md`](docs/sources/opencode.md).

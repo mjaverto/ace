@@ -1,4 +1,4 @@
-// src/sources/pi.ts — Block Pi / Goose JSONL renderer
+// src/sources/pi.ts — pi-mono (badlogic/pi-mono) JSONL renderer
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -170,7 +170,7 @@ function renderPiContent(
 
 export const piSource: AgentSource = {
   name: "pi",
-  displayName: "Block Pi",
+  displayName: "pi (pi-mono)",
 
   defaultRoots(home: string): string[] {
     return [`${home}/.pi/agent/sessions`];
