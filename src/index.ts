@@ -37,3 +37,7 @@ export type { ToolCallBlockOpts, ToolOutputBlockOpts } from "./markdown.js";
 export { readJsonl, fmtTs, expandHome, safeStat } from "./shared/util.js";
 export type { JsonlLine } from "./shared/util.js";
 export { jsonlEnumerate } from "./shared/jsonl-enumerate.js";
+
+// Sources registry
+export { createDefaultRegistry, loadPlugins } from "./sources/index.js";
+export { claudeSource, codexSource, piSource, opencodeSource } from "./sources/index.js";
