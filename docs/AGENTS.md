@@ -35,7 +35,7 @@ type RenderResultLine = {
 
 | Flag                | Use case                                                                |
 | ------------------- | ----------------------------------------------------------------------- |
-| `--source <name>`   | Restrict to one source (`claude`, `codex`, `pi`, `opencode`, …).        |
+| `--source <name>`   | Restrict to one source (`claude`, `codex`, `pi`, `omp`, `opencode`, …). |
 | `--out <dir>`       | Override config `output`. Useful for sandboxed agent invocations.       |
 | `--force`           | Re-render everything; ignore the incremental cache.                     |
 | `--dry-run`         | Print what would be rendered; write nothing.                            |
@@ -79,7 +79,7 @@ Every rendered file starts with a YAML frontmatter block. `aceSchema: 1` is the 
 | `sourceMtime`   | ISO-8601 |  N   | mtime of the source artifact.                                          |
 | `x_<source>`    | object   |  N   | Source-specific extras. See `docs/sources/<source>.md`.                |
 
-The full set of `x_<source>` keys is documented per source: [`claude`](sources/claude.md), [`codex`](sources/codex.md), [`pi`](sources/pi.md), [`opencode`](sources/opencode.md).
+The full set of `x_<source>` keys is documented per source: [`claude`](sources/claude.md), [`codex`](sources/codex.md), [`pi`](sources/pi.md), [`omp`](sources/omp.md), [`opencode`](sources/opencode.md).
 
 ## Exit codes
 

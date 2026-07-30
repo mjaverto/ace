@@ -1,0 +1,6 @@
+{"type":"title","v":1,"title":"What is the current directory structure?","source":"auto","updatedAt":"2026-05-01T09:00:04.000Z"}
+{"type":"session","version":3,"id":"omp-sess-0001-aaaa-bbbb-cccc","timestamp":"2026-05-01T09:00:00.000Z","cwd":"/Users/example/projects/myapp","title":"What is the current directory structure?","titleSource":"auto"}
+{"type":"model_change","id":"mc1","parentId":null,"timestamp":"2026-05-01T09:00:01.000Z","model":"anthropic/claude-opus-4-5"}
+{"type":"custom_message","customType":"xdev-mount-notice","content":"<system-notice>ignored top-level event</system-notice>"}
+{"type":"message","id":"m1","parentId":null,"timestamp":"2026-05-01T09:00:05.000Z","message":{"role":"user","content":[{"type":"text","text":"What is the current directory structure?"}],"attribution":"user","timestamp":1746090005000}}
+{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-05-01T09:00:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I can help you understand the directory structure of your project. Let me describe what I see."}],"api":"anthropic-messages","provider":"anthropic","model":"claude-opus-4-5"}}

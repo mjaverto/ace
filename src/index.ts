@@ -40,4 +40,4 @@ export { jsonlEnumerate } from "./shared/jsonl-enumerate.js";
 
 // Sources registry
 export { createDefaultRegistry, loadPlugins } from "./sources/index.js";
-export { claudeSource, codexSource, piSource, opencodeSource } from "./sources/index.js";
+export { claudeSource, codexSource, piSource, ompSource, opencodeSource } from "./sources/index.js";

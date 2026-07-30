@@ -20,7 +20,7 @@ npx @mjaverto/ace render
 
 ## Why ace
 
-Every AI-agent CLI stores its transcripts in a different blob: Claude Code uses one JSONL per session under `~/.claude/projects/`, OpenAI's Codex CLI rolls its own JSONL under `~/.codex/sessions/`, [pi-mono](https://github.com/badlogic/pi-mono) writes flat-event JSONL under `~/.pi/agent/sessions/`, and opencode (sst) keeps everything in a SQLite database at `~/.local/share/opencode/opencode.db`. Each shape is sensible for the tool that wrote it; none of them are ergonomic for *you*, the human or agent who wants to grep, index, embed, or read those conversations later.
+Every AI-agent CLI stores its transcripts in a different blob: Claude Code uses one JSONL per session under `~/.claude/projects/`, OpenAI's Codex CLI rolls its own JSONL under `~/.codex/sessions/`, [pi-mono](https://github.com/badlogic/pi-mono) writes flat-event JSONL under `~/.pi/agent/sessions/`, oh-my-pi (pi-mono's successor CLI) writes a close variant under `~/.omp/agent/sessions/`, and opencode (sst) keeps everything in a SQLite database at `~/.local/share/opencode/opencode.db`. Each shape is sensible for the tool that wrote it; none of them are ergonomic for *you*, the human or agent who wants to grep, index, embed, or read those conversations later.
 
 `ace` converts all of them into clean Markdown with consistent YAML frontmatter, into one output directory you control. Once everything is Markdown, the rest of the toolchain just works — drop the output into a [QMD](https://github.com/tobi/qmd)-style indexed vault, sync it to a Drive folder, feed it to embeddings, or scroll through `glow` like any other notes directory. ace owns the conversion pipeline. What you do with the rendered Markdown is your problem (and the entire point).
 
@@ -31,9 +31,10 @@ Every AI-agent CLI stores its transcripts in a different blob: Claude Code uses 
 | Claude Code      |   v   | `~/.claude/projects/<slug>/<uuid>.jsonl`                                 | Anthropic CLI        |
 | OpenAI Codex CLI |   v   | `~/.codex/{sessions,archived_sessions}/...rollout-*.jsonl`               | rollout JSONL        |
 | pi (pi-mono)     |   v   | `~/.pi/agent/sessions/<workspace>/<ts>_<uuid>.jsonl`                     | [badlogic/pi-mono](https://github.com/badlogic/pi-mono) |
+| omp (oh-my-pi)   |   v   | `~/.omp/agent/sessions/<workspace>/<ts>_<uuid>.jsonl`                    | pi-mono's successor  |
 | opencode (sst)   |   v   | `~/.local/share/opencode/opencode.db` (SQLite)                           | Read-only access     |
 
-Per-source schema notes: [`docs/sources/claude.md`](docs/sources/claude.md) · [`docs/sources/codex.md`](docs/sources/codex.md) · [`docs/sources/pi.md`](docs/sources/pi.md) · [`docs/sources/opencode.md`](docs/sources/opencode.md).
+Per-source schema notes: [`docs/sources/claude.md`](docs/sources/claude.md) · [`docs/sources/codex.md`](docs/sources/codex.md) · [`docs/sources/pi.md`](docs/sources/pi.md) · [`docs/sources/omp.md`](docs/sources/omp.md) · [`docs/sources/opencode.md`](docs/sources/opencode.md).
 
 ## 60-second quickstart
 
@@ -85,6 +86,9 @@ sources:
   pi:
     enabled: true
     roots: [~/.pi/agent/sessions]
+  omp:
+    enabled: true
+    roots: [~/.omp/agent/sessions]
   opencode:
     enabled: true
     # roots may point at a SQLite db file directly, or its parent dir.
@@ -107,7 +111,7 @@ One-shot incremental render of every configured source.
 | Flag                     | Default            | Notes                                                                |
 | ------------------------ | ------------------ | -------------------------------------------------------------------- |
 | `--config <path>`        | auto-discover      | Path to config file.                                                 |
-| `--source <name>`        | (all enabled)      | Restrict to one source (`claude`, `codex`, `pi`, `opencode`, …).     |
+| `--source <name>`        | (all enabled)      | Restrict to one source (`claude`, `codex`, `pi`, `omp`, `opencode`, …). |
 | `--out <dir>`            | from config        | Override config `output`.                                            |
 | `--dry-run`              | `false`            | Print what would be rendered; write nothing.                         |
 | `--force`                | `false`            | Ignore the incremental cache; re-render everything.                  |
@@ -183,11 +187,11 @@ Resolves the platform log path and prints it.
 ## Output layout
 
 ```
-<output>/
   claude/<source-relative>.md
   codex/sessions/<YYYY>/<MM>/<DD>/<rollout>.md
   codex/archived_sessions/<rollout>.md
   pi/<workspace-slug>/<ts>_<uuid>.md
+  omp/<workspace-slug>/<ts>_<uuid>.md
   opencode/<project-slug>/<session_id>.md
   .ace.state.json          # only when strategy = index
 ```

@@ -1,12 +1,12 @@
-// src/sources/index.ts — registers all four built-in sources and exposes plugin loader
+// src/sources/index.ts — registers all five built-in sources and exposes plugin loader
 
 import type { AgentSource } from "../types.js";
 import { Registry } from "../registry.js";
 import { claudeSource } from "./claude.js";
 import { codexSource } from "./codex.js";
 import { piSource } from "./pi.js";
+import { ompSource } from "./omp.js";
 import { opencodeSource } from "./opencode.js";
-
 // ---------------------------------------------------------------------------
 // Default registry factory
 // ---------------------------------------------------------------------------
@@ -16,6 +16,7 @@ export function createDefaultRegistry(): Registry {
   r.register(claudeSource);
   r.register(codexSource);
   r.register(piSource);
+  r.register(ompSource);
   r.register(opencodeSource);
   return r;
 }
@@ -79,4 +80,4 @@ export async function loadPlugins(
 }
 
 // Re-export individual sources for convenience
-export { claudeSource, codexSource, piSource, opencodeSource };
+export { claudeSource, codexSource, piSource, ompSource, opencodeSource };

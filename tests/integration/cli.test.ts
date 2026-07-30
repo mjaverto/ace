@@ -119,18 +119,18 @@ describe("ace --help", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. ace list-sources --json — 4 sources
+// 2. ace list-sources --json — 5 sources
 // ---------------------------------------------------------------------------
 
 describe("ace list-sources --json", () => {
-  it("returns valid JSON array with exactly 4 sources", async () => {
+  it("returns valid JSON array with exactly 5 sources", async () => {
     const { stdout, exitCode } = await ace(["list-sources", "--json"]);
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout) as unknown[];
     expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed).toHaveLength(4);
+    expect(parsed).toHaveLength(5);
     const names = (parsed as Array<{ name: string }>).map((s) => s.name).sort();
-    expect(names).toEqual(["claude", "codex", "opencode", "pi"]);
+    expect(names).toEqual(["claude", "codex", "omp", "opencode", "pi"]);
   });
 });
 
