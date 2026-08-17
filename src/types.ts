@@ -20,7 +20,15 @@ export interface SessionHandle {
   mtimeMs: number;
   /** Size hint when known (file size or row count); used only for telemetry */
   sizeBytes?: number;
-  /** Relative output path (no `.md` extension required — core appends if missing) */
+  /**
+   * Legacy/fallback relative output path (no `.md` extension required — core
+   * appends if missing).
+   *
+   * The real output path is computed by the core from the rendered frontmatter
+   * (`buildRelPath` in `src/core/naming.ts`); sources do not decide layout.
+   * This value survives as the provisional target reported before a render and
+   * as the fallback when no index entry exists yet.
+   */
   outputRelPath: string;
   /** Opaque per-source data the renderer needs (file path, db id, …) */
   payload: unknown;
@@ -33,7 +41,13 @@ export interface EnumerateContext {
 }
 
 export interface RenderContext {
-  outPath: string;     // absolute path the core will write to
+  /**
+   * Provisional absolute output path — the previously written path when known,
+   * otherwise the legacy `handle.outputRelPath` resolved against the output
+   * root. The core recomputes the final path from the returned frontmatter, so
+   * renderers must not assume this is where the note lands.
+   */
+  outPath: string;
   now: Date;
   truncate: { toolOutput: number; toolInput: number };
   logger: Logger;

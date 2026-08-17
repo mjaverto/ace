@@ -1,4 +1,20 @@
 // src/markdown.ts — markdown rendering helpers
+//
+// SECURITY CHOKE POINT
+// --------------------
+// `fence` and `detailsBlock` are the only two primitives here that emit *verbatim
+// external bytes* — tool input (via toolCallBlock), tool output (via toolOutputBlock),
+// schema-drift dumps and raw image blocks (via sectionForUnknown), and assistant thinking
+// (via detailsBlock). Every one of those funnels through these two functions, so
+// sanitizing here covers all of them with two call sites instead of one per source.
+//
+// Message prose does NOT pass through this module: all five sources emit text blocks with
+// `return text + "\n\n"` directly. That region is covered by the whole-document
+// `sanitizeMarkdown` pass in `runRender`. The two layers overlap deliberately —
+// `sanitizeMarkdown` is idempotent, so double application is a no-op, and tool output (the
+// dominant leak vector: `cat .env` dumps, `curl -H "Authorization: …"`) stays protected
+// here even independently of the core pipeline.
+import { sanitizeMarkdown } from "./core/redact.js";
 
 // ---------------------------------------------------------------------------
 // heading
@@ -39,10 +55,11 @@ export function roleHeading(role: string, ts?: Date | number | string): string {
 
 /**
  * Returns a fenced code block.
- * The body is trimmed of trailing whitespace.
+ * The body is sanitized (credentials redacted, base64 payloads omitted, control
+ * characters stripped) and then trimmed of trailing whitespace.
  */
 export function fence(lang: string, body: string): string {
-  const trimmed = body.replace(/\s+$/, "");
+  const trimmed = sanitizeMarkdown(body).text.replace(/\s+$/, "");
   return `\`\`\`${lang}\n${trimmed}\n\`\`\`\n\n`;
 }
 
@@ -51,10 +68,12 @@ export function fence(lang: string, body: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns an HTML <details> block.
+ * Returns an HTML <details> block. The body is sanitized — see the note at the top of
+ * this file.
  */
 export function detailsBlock(summary: string, body: string): string {
-  return `<details><summary>${summary}</summary>\n\n${body}\n\n</details>\n\n`;
+  const clean = sanitizeMarkdown(body).text;
+  return `<details><summary>${summary}</summary>\n\n${clean}\n\n</details>\n\n`;
 }
 
 // ---------------------------------------------------------------------------

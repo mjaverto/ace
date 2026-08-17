@@ -4,7 +4,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { needsRender, type IndexState } from "../../src/core/incremental.js";
+import {
+  needsRender,
+  pruneLegacyEntries,
+  type IndexEntry,
+  type IndexState,
+} from "../../src/core/incremental.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -87,52 +92,119 @@ describe("needsRender — mtime strategy", () => {
 // ---------------------------------------------------------------------------
 
 describe("needsRender — index strategy", () => {
-  const DST = "/tmp/fake.md"; // doesn't need to exist for index strategy
+  const KEY = "claude/Users/mike/.claude/projects/proj/abc.jsonl";
+
+  /** An index entry pointing at a real file on disk. */
+  async function entryFor(outName: string, overrides: Partial<IndexEntry> = {}): Promise<IndexEntry> {
+    const outPath = await writeTmpFile(outName, "# note");
+    return { srcMtimeMs: 1000, srcSizeBytes: 500, renderedAt: "2026-05-01T00:00:00.000Z", outPath, ...overrides };
+  }
 
   it("returns true when state is missing entirely", async () => {
-    const result = await needsRender(1000, 500, DST, "index");
+    const result = await needsRender(1000, 500, "/tmp/ignored.md", "index");
     expect(result).toBe(true);
   });
 
   it("returns true when stateKey is not in the state map (entry missing)", async () => {
     const state: IndexState = {};
-    const result = await needsRender(1000, 500, DST, "index", state, "claude/foo/bar.md");
+    const result = await needsRender(1000, 500, "/tmp/ignored.md", "index", state, KEY);
     expect(result).toBe(true);
   });
 
-  it("returns false when entry matches srcMtimeMs and srcSizeBytes exactly", async () => {
-    const state: IndexState = {
-      "claude/foo/bar.md": {
-        srcMtimeMs: 1000,
-        srcSizeBytes: 500,
-        renderedAt: "2026-05-01T00:00:00.000Z",
-      },
-    };
-    const result = await needsRender(1000, 500, DST, "index", state, "claude/foo/bar.md");
+  it("returns false when entry matches srcMtimeMs/srcSizeBytes and outPath exists", async () => {
+    const state: IndexState = { [KEY]: await entryFor("note-fresh.md") };
+    const result = await needsRender(1000, 500, "/tmp/ignored.md", "index", state, KEY);
     expect(result).toBe(false);
   });
 
   it("returns true when srcMtimeMs differs from entry (entry stale — mtime changed)", async () => {
-    const state: IndexState = {
-      "claude/foo/bar.md": {
-        srcMtimeMs: 1000,
-        srcSizeBytes: 500,
-        renderedAt: "2026-05-01T00:00:00.000Z",
-      },
-    };
-    const result = await needsRender(2000, 500, DST, "index", state, "claude/foo/bar.md");
+    const state: IndexState = { [KEY]: await entryFor("note-mtime.md") };
+    const result = await needsRender(2000, 500, "/tmp/ignored.md", "index", state, KEY);
     expect(result).toBe(true);
   });
 
   it("returns true when srcSizeBytes differs from entry (entry stale — size changed)", async () => {
+    const state: IndexState = { [KEY]: await entryFor("note-size.md") };
+    const result = await needsRender(1000, 600, "/tmp/ignored.md", "index", state, KEY);
+    expect(result).toBe(true);
+  });
+
+  it("returns true when the recorded outPath no longer exists on disk (self-heal)", async () => {
+    const entry = await entryFor("note-deleted.md");
+    await fs.rm(entry.outPath);
+    const state: IndexState = { [KEY]: entry };
+    const result = await needsRender(1000, 500, "/tmp/ignored.md", "index", state, KEY);
+    expect(result).toBe(true);
+  });
+
+  it("ignores dstAbsPath — the entry's own outPath is the authority", async () => {
+    const state: IndexState = { [KEY]: await entryFor("note-authority.md") };
+    // dstAbsPath does not exist, yet the entry is fresh → no render.
+    const result = await needsRender(1000, 500, path.join(tmpDir, "nope.md"), "index", state, KEY);
+    expect(result).toBe(false);
+  });
+
+  it("returns true for a legacy entry with no outPath (pre-layout state file)", async () => {
+    // Shape written by ace before the layout redesign: no outPath at all.
+    const legacy = {
+      srcMtimeMs: 1000,
+      srcSizeBytes: 500,
+      renderedAt: "2026-05-01T00:00:00.000Z",
+    } as unknown as IndexEntry;
+    const state: IndexState = { [KEY]: legacy };
+    const result = await needsRender(1000, 500, "/tmp/ignored.md", "index", state, KEY);
+    expect(result).toBe(true);
+  });
+
+  it("returns true when outPath is present but empty", async () => {
+    const state: IndexState = { [KEY]: await entryFor("note-empty.md", { outPath: "" }) };
+    const result = await needsRender(1000, 500, "/tmp/ignored.md", "index", state, KEY);
+    expect(result).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pruneLegacyEntries
+// ---------------------------------------------------------------------------
+
+describe("pruneLegacyEntries", () => {
+  it("drops entries with no outPath and keeps the rest", () => {
     const state: IndexState = {
-      "claude/foo/bar.md": {
-        srcMtimeMs: 1000,
-        srcSizeBytes: 500,
+      "claude/a": {
+        srcMtimeMs: 1,
+        srcSizeBytes: 2,
         renderedAt: "2026-05-01T00:00:00.000Z",
+        outPath: "/out/claude/2026/05/note.md",
+      },
+      "claude/b": {
+        srcMtimeMs: 1,
+        srcSizeBytes: 2,
+        renderedAt: "2026-05-01T00:00:00.000Z",
+      } as unknown as IndexEntry,
+      "claude/c": {
+        srcMtimeMs: 1,
+        srcSizeBytes: 2,
+        renderedAt: "2026-05-01T00:00:00.000Z",
+        outPath: "",
       },
     };
-    const result = await needsRender(1000, 600, DST, "index", state, "claude/foo/bar.md");
-    expect(result).toBe(true);
+
+    const pruned = pruneLegacyEntries(state);
+
+    expect(pruned).toBe(2);
+    expect(Object.keys(state)).toEqual(["claude/a"]);
+  });
+
+  it("returns 0 for a fully migrated state", () => {
+    const state: IndexState = {
+      "claude/a": {
+        srcMtimeMs: 1,
+        srcSizeBytes: 2,
+        renderedAt: "2026-05-01T00:00:00.000Z",
+        outPath: "/out/claude/2026/05/note.md",
+      },
+    };
+    expect(pruneLegacyEntries(state)).toBe(0);
+    expect(Object.keys(state)).toEqual(["claude/a"]);
   });
 });

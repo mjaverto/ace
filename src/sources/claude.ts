@@ -77,10 +77,30 @@ interface ClaudeJsonlLine {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const MATCH_RE = /\.claude\/projects\/[^/]+\/[0-9a-f-]+\.jsonl$/;
+// Session transcripts live at more than one depth under `.claude/projects/`:
+//   projects/<project>/<sessionId>.jsonl                       — top-level session
+//   projects/<project>/<sessionId>/subagents/agent-<id>.jsonl  — subagent transcript
+//
+// The previous pattern pinned exactly one directory level below `projects/` plus a
+// hex/dash basename, which silently dropped every subagent transcript (16 of 35
+// files on a representative store). Matching any depth also picks up layouts
+// Claude adds later without another regex edit. Still anchored on
+// `.claude/projects/`, so unrelated files such as `~/.claude/history.jsonl` (a
+// shell-history log, not a transcript) stay excluded.
+const MATCH_RE = /\.claude\/projects\/.+\.jsonl$/;
+
+const PROJECTS_REL_RE = /\.claude\/projects\/(.+)$/;
 
 function outputPathFor(absPath: string, _root: string): string {
-  // claude/<parent-dir-basename>/<uuid>.md
+  // Preserve the whole sub-path below `projects/` so nested subagent transcripts
+  // keep their project + session grouping instead of flattening into a single
+  // `claude/subagents/` directory. For top-level sessions the result is
+  // byte-identical to the historical `claude/<project>/<sessionId>.md` layout, so
+  // already-rendered notes are not orphaned.
+  const rel = PROJECTS_REL_RE.exec(absPath)?.[1];
+  if (rel !== undefined) return `claude/${rel.replace(/\.jsonl$/, ".md")}`;
+
+  // Fallback for paths outside the standard layout (custom configured roots).
   const uuidFile = path.basename(absPath, ".jsonl") + ".md";
   const projectSlug = path.basename(path.dirname(absPath));
   return `claude/${projectSlug}/${uuidFile}`;

@@ -2,7 +2,7 @@
 
 import path from "node:path";
 import fs from "node:fs/promises";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import {
   roleHeading,
   detailsBlock,
@@ -21,6 +21,127 @@ import type {
   RenderResult,
   Frontmatter,
 } from "../types.js";
+
+// ---------------------------------------------------------------------------
+// Lazy better-sqlite3 loader
+// ---------------------------------------------------------------------------
+//
+// better-sqlite3 is a native addon: loading it dlopen()s a binding compiled
+// against one specific Node ABI (NODE_MODULE_VERSION). A host that upgraded
+// Node without rebuilding the module — or that never installed the dependency
+// at all — throws ERR_DLOPEN_FAILED at *module load* time, before any of our
+// code runs.
+//
+// This module is reachable from src/sources/index.ts, which the CLI imports
+// unconditionally to build the default registry. A static
+// `import Database from "better-sqlite3"` therefore made the whole ace CLI
+// unstartable on such a host, even when it holds no opencode database at all
+// and every other source (claude/codex/pi/omp) is pure JSON parsing.
+//
+// The import is deferred to the moment an opencode database is actually about
+// to be opened, and a load failure is attributed to the opencode source alone.
+
+/** Bare specifier of the native dependency. Exported for diagnostics/tests. */
+export const SQLITE_MODULE_SPECIFIER = "better-sqlite3";
+
+type DatabaseCtor = typeof Database;
+
+/**
+ * Message for "the native module could not be loaded at all".
+ *
+ * Deliberately worded so it can never be mistaken for
+ * `opencodeDbNotFoundMessage`: this one means the *code* is unusable, not that
+ * the *data* is absent.
+ */
+export function sqliteUnavailableMessage(cause: unknown): string {
+  const detail = (cause instanceof Error ? cause.message : String(cause))
+    .replace(/\s+/g, " ")
+    .trim();
+  return (
+    `[opencode] native module "${SQLITE_MODULE_SPECIFIER}" is unavailable, so ` +
+    `opencode sessions cannot be read on this host. This is a module/ABI ` +
+    `failure, not a missing database: the package is either not installed or ` +
+    `its compiled binding targets a different Node.js ABI than the running ` +
+    `interpreter (NODE_MODULE_VERSION mismatch). Rebuild it for this runtime ` +
+    `(\`npm rebuild ${SQLITE_MODULE_SPECIFIER}\`) or set ` +
+    `\`sources.opencode.enabled: false\` in the ace config. Every other source ` +
+    `is unaffected. Load error: ${detail}`
+  );
+}
+
+/**
+ * Message for "no opencode database at this root".
+ *
+ * A normal, expected condition on any host that does not run opencode. Logged
+ * at debug and never counted as an error — and note that better-sqlite3 has not
+ * even been loaded when this is emitted.
+ */
+export function opencodeDbNotFoundMessage(root: string): string {
+  return (
+    `[opencode] database not found at ${root}, nothing to render for this ` +
+    `root. This is normal on a host that does not run opencode; ` +
+    `"${SQLITE_MODULE_SPECIFIER}" was not loaded.`
+  );
+}
+
+/**
+ * Raised when better-sqlite3 cannot be loaded. Thrown out of `enumerate` and
+ * `render` so `runRender` records it against the opencode source and every
+ * other source still renders normally.
+ */
+export class OpencodeSqliteUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(sqliteUnavailableMessage(cause), { cause });
+    this.name = "OpencodeSqliteUnavailableError";
+  }
+}
+
+/** Resolved constructor, memoized for the process lifetime. */
+let sqliteCtor: DatabaseCtor | undefined;
+
+/**
+ * Memoized load failure. A native ABI mismatch cannot heal inside a running
+ * process, so the failing import is attempted at most once per process rather
+ * than once per session (thousands of times in a real run).
+ */
+let sqliteLoadError: OpencodeSqliteUnavailableError | undefined;
+
+/**
+ * Import better-sqlite3 on first use.
+ *
+ * @throws {OpencodeSqliteUnavailableError} when the module cannot be loaded.
+ */
+async function loadDatabaseCtor(): Promise<DatabaseCtor> {
+  if (sqliteCtor !== undefined) return sqliteCtor;
+  if (sqliteLoadError !== undefined) throw sqliteLoadError;
+
+  try {
+    // Dynamic on purpose: this is a native addon that legitimately does not
+    // load on every host (missing install, or a binding built for another Node
+    // ABI). A static import would fail the entire CLI at startup instead of
+    // this one source. See the section comment above.
+    const mod: unknown = await import("better-sqlite3");
+    // CJS interop puts the constructor on `default`; some runtimes hand back
+    // the constructor itself.
+    const candidate =
+      mod !== null && typeof mod === "object" && "default" in mod ? mod.default : mod;
+    if (typeof candidate !== "function") {
+      throw new TypeError(
+        `module resolved but exported no constructor (got ${typeof candidate})`
+      );
+    }
+    // Structurally identical to the declared constructor; the dynamic import
+    // erases the nominal type and no runtime check can recover it.
+    sqliteCtor = candidate as DatabaseCtor;
+    return sqliteCtor;
+  } catch (err) {
+    sqliteLoadError =
+      err instanceof OpencodeSqliteUnavailableError
+        ? err
+        : new OpencodeSqliteUnavailableError(err);
+    throw sqliteLoadError;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Type helpers for opencode SQLite schema
@@ -303,7 +424,10 @@ export const opencodeSource: AgentSource = {
     const payload = handle.payload as OpencodePayload;
     const { dbPath, sessionId, projectId, slug, directory, title, version } = payload;
 
-    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    // Loaded on demand. The handle only exists because enumerate already found
+    // this database, so in a normal run the module is warm by now.
+    const Sqlite = await loadDatabaseCtor();
+    const db = new Sqlite(dbPath, { readonly: true, fileMustExist: true });
     try {
       // Load session row for time_created / time_updated
       const sessionRow = db
@@ -445,18 +569,37 @@ async function* generateHandles(
     process.env["HOME"] ?? process.env["USERPROFILE"] ?? ""
   );
 
+  // Resolve every root to a concrete database file *before* touching
+  // better-sqlite3. A host with no opencode database has no reason to pay for
+  // — or fail on — the native module load: "opencode not in use" must stay a
+  // clean, silent no-op, which is the entire point of the lazy import.
+  const dbPaths: string[] = [];
   for (const rawRoot of roots) {
     const dbPath = await resolveDbPath(rawRoot);
     if (dbPath === null) {
-      ctx.logger.debug(`[opencode] root not found or no opencode.db: ${rawRoot}`);
+      ctx.logger.debug(opencodeDbNotFoundMessage(rawRoot));
       continue;
     }
+    dbPaths.push(dbPath);
+  }
+  if (dbPaths.length === 0) return;
 
+  // At least one database exists, so opencode really is in use on this host. If
+  // the native module is broken this throws, and runRender records it as this
+  // source's `__enumerate__` error while every other source still renders.
+  const Sqlite = await loadDatabaseCtor();
+
+  for (const dbPath of dbPaths) {
     let db: Database.Database;
     try {
-      db = new Database(dbPath, { readonly: true, fileMustExist: true });
+      db = new Sqlite(dbPath, { readonly: true, fileMustExist: true });
     } catch (err) {
-      ctx.logger.warn(`[opencode] failed to open DB ${dbPath}: ${String(err)}`);
+      // The file exists but SQLite refused it: corrupt, unreadable, or simply
+      // not an opencode database. Distinct from both cases above — skip this
+      // root and keep the others.
+      ctx.logger.warn(
+        `[opencode] database at ${dbPath} exists but could not be opened: ${String(err)}`
+      );
       continue;
     }
 

@@ -106,9 +106,30 @@ type OmpEvent =
 // Helpers
 // ---------------------------------------------------------------------------
 
-const MATCH_RE = /\.omp\/agent\/sessions\/[^/]+\/[^/]+\.jsonl$/;
+// omp nests subagent transcripts below the parent session directory, and does so
+// at more than one level:
+//   sessions/<cwd-bucket>/<session-dir>.jsonl                          — parent session
+//   sessions/<cwd-bucket>/<session-dir>/<AgentName>.jsonl              — subagent
+//   sessions/<cwd-bucket>/<session-dir>/<AgentName>/<AgentName>.<Sub>.jsonl
+//                                                                     — nested subagent
+//
+// The previous pattern pinned exactly two levels below `sessions/`, so every
+// nested transcript was dropped. Those are the bulk of the corpus, not an edge
+// case: 621 of 741 files (~84%) on a representative store. Match any depth.
+const MATCH_RE = /\.omp\/agent\/sessions\/.+\.jsonl$/;
+
+const SESSIONS_REL_RE = /\.omp\/agent\/sessions\/(.+)$/;
 
 function outputPathFor(absPath: string, _root: string): string {
+  // Preserve the whole sub-path below `sessions/` so a subagent transcript stays
+  // grouped under its parent session rather than colliding with same-named agents
+  // from other sessions. For parent sessions the result is byte-identical to the
+  // historical `omp/<cwd-bucket>/<session>.md` layout, so already-rendered notes
+  // are not orphaned.
+  const rel = SESSIONS_REL_RE.exec(absPath)?.[1];
+  if (rel !== undefined) return `omp/${rel.replace(/\.jsonl$/, ".md")}`;
+
+  // Fallback for paths outside the standard layout (custom configured roots).
   const workspaceSlug = path.basename(path.dirname(absPath));
   const filename = path.basename(absPath, ".jsonl") + ".md";
   return `omp/${workspaceSlug}/${filename}`;

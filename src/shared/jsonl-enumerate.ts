@@ -104,6 +104,16 @@ async function* generateHandles(
         continue;
       }
 
+      // An empty file holds no events, so rendering it can only produce a note
+      // with frontmatter and no content. Skip it here rather than emitting an
+      // empty note. `stat` is already in hand, so this costs nothing, and the
+      // file is picked up on a later run once it has content — enumeration is
+      // re-run from scratch every time.
+      if (stat.size === 0) {
+        ctx.logger.debug(`[jsonlEnumerate] empty file, skipping: ${absPath}`);
+        continue;
+      }
+
       const outputRelPath = outputPathFor(absPath, root);
 
       yield {

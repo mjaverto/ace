@@ -47,7 +47,9 @@ beforeAll(async () => {
   );
 
   // Minimal config: points claude source at the matching directory.
-  // Explicitly disable all other sources so the test doesn't walk real machine paths.
+  // Explicitly disable every other registered source so the test doesn't walk
+  // real machine paths. A source missing from this list defaults to enabled and
+  // renders the developer's live sessions, which mutate mid-run.
   const config = {
     output: outDir,
     strategy: "mtime",
@@ -59,6 +61,7 @@ beforeAll(async () => {
       codex: { enabled: false },
       pi: { enabled: false },
       opencode: { enabled: false },
+      omp: { enabled: false },
     },
   };
 

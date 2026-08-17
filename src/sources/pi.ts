@@ -94,9 +94,35 @@ type PiEvent =
 // Helpers
 // ---------------------------------------------------------------------------
 
-const MATCH_RE = /\.pi\/agent\/sessions\/[^/]+\/[^/]+\.jsonl$/;
+// pi keeps transcripts in three separate trees, all of which are real sessions:
+//   agent/sessions/<workspace>/<file>.jsonl        — ordinary sessions
+//   agent/teams/<teamId>/sessions/<file>.jsonl     — team sessions (missed before:
+//                                                    a different depth AND a
+//                                                    different root)
+//   paperclips/<file>.jsonl                        — paperclip runs, flat
+//
+// Depth is unpinned for the same reason as claude/omp: pi has added a level before
+// and the fixed-depth pattern lost whole trees silently.
+const MATCH_RE = /\.pi\/(?:agent\/(?:sessions|teams)|paperclips)\/.+\.jsonl$/;
+
+// One anchor per tree, mapping an absolute path to its output prefix. The three
+// anchors are mutually exclusive, so order is presentational only.
+const REL_ANCHORS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Historical layout — no bucket prefix, so existing notes are not orphaned.
+  [/\.pi\/agent\/sessions\/(.+)$/, "pi"],
+  // New trees get a bucket prefix so a team session and an ordinary session with
+  // the same basename cannot land on the same output path.
+  [/\.pi\/agent\/teams\/(.+)$/, "pi/teams"],
+  [/\.pi\/paperclips\/(.+)$/, "pi/paperclips"],
+];
 
 function outputPathFor(absPath: string, _root: string): string {
+  for (const [re, prefix] of REL_ANCHORS) {
+    const rel = re.exec(absPath)?.[1];
+    if (rel !== undefined) return `${prefix}/${rel.replace(/\.jsonl$/, ".md")}`;
+  }
+
+  // Fallback for paths outside the standard layouts (custom configured roots).
   const workspaceSlug = path.basename(path.dirname(absPath));
   const filename = path.basename(absPath, ".jsonl") + ".md";
   return `pi/${workspaceSlug}/${filename}`;
@@ -173,7 +199,15 @@ export const piSource: AgentSource = {
   displayName: "pi (pi-mono)",
 
   defaultRoots(home: string): string[] {
-    return [`${home}/.pi/agent/sessions`];
+    // Roots that are absent on a given host are skipped silently by the shared
+    // enumerator, so declaring all three is safe cross-platform: `paperclips` is
+    // empty test scaffolding on some machines and 70+ real multi-MB sessions on
+    // others, and `teams` only exists once a team session has been run.
+    return [
+      `${home}/.pi/agent/sessions`,
+      `${home}/.pi/agent/teams`,
+      `${home}/.pi/paperclips`,
+    ];
   },
 
   enumerate: jsonlEnumerate({

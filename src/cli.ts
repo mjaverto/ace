@@ -7,6 +7,8 @@ import os from "node:os";
 import { loadConfig } from "./config/load.js";
 import { runRender } from "./core/render.js";
 import { expandHome } from "./shared/util.js";
+import { serializeFrontmatter } from "./frontmatter.js";
+import { sanitizeFrontmatter, sanitizeMarkdown } from "./core/redact.js";
 import { createDefaultRegistry, loadPlugins } from "./sources/index.js";
 import {
   installLaunchd,
@@ -17,7 +19,14 @@ import {
   uninstallCron,
   resolveLogPath,
   tailLog,
+  detectScheduler,
+  platformNotes,
+  scheduleStatus,
+  formatScheduleStatus,
+  DEFAULT_LABEL,
+  type SchedulerKind,
 } from "./schedule/index.js";
+import { checkPower, formatPowerCheck } from "./core/power.js";
 import type { Logger } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -54,6 +63,45 @@ function toArray(val: string | string[] | boolean | undefined): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Power gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Env escape hatch so a scheduler (or a wrapper script) can turn the gate on
+ * without regenerating the unit file: ACE_SKIP_ON_BATTERY=1.
+ */
+const SKIP_ON_BATTERY_ENV = "ACE_SKIP_ON_BATTERY";
+
+function powerGateRequested(flag: boolean): boolean {
+  if (flag) return true;
+  const raw = (process.env[SKIP_ON_BATTERY_ENV] ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/**
+ * Returns false when the caller should stop without rendering.
+ * Logs the power detail on BOTH paths: an undetected probe means the gate is not
+ * protecting anything, and that has to be visible in the scheduled log.
+ */
+function powerGateAllowsRun(logger: Logger, skipFlag: boolean, force: boolean): boolean {
+  if (!powerGateRequested(skipFlag)) return true;
+
+  const power = checkPower();
+  if (!power.ok) {
+    if (!force) {
+      logger.info(`ace render: skipping — ${power.detail}`);
+      return false;
+    }
+    logger.info(`power: proceeding despite battery (--ignore-battery) — ${power.detail}`);
+    return true;
+  }
+
+  const undetected = power.detected ? "" : " [power state undetected — gate failed open]";
+  logger.info(`${formatPowerCheck(power)}${undetected}`);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Subcommands
 // ---------------------------------------------------------------------------
 
@@ -75,10 +123,31 @@ const renderCmd = defineCommand({
       description: "Emit NDJSON results to stdout",
       default: false,
     },
+    "skip-on-battery": {
+      type: "boolean",
+      description:
+        "Do nothing when this machine is running on battery (also enabled by ACE_SKIP_ON_BATTERY=1)",
+      default: false,
+    },
+    "ignore-battery": {
+      type: "boolean",
+      description: "Force the run even on battery, overriding --skip-on-battery",
+      default: false,
+    },
     verbose: { type: "boolean", description: "Debug logging", default: false },
   },
   async run({ args }) {
     const logger = makeLogger(args.verbose);
+
+    if (
+      !powerGateAllowsRun(
+        logger,
+        args["skip-on-battery"] as boolean,
+        args["ignore-battery"] as boolean
+      )
+    ) {
+      return;
+    }
 
     let config = await loadConfig(args.config as string | undefined).catch(
       (err: unknown) => {
@@ -254,9 +323,22 @@ const renderOneCmd = defineCommand({
         logger,
       });
 
-      const { serializeFrontmatter } = await import("./frontmatter.js");
-      const output =
-        serializeFrontmatter(result.frontmatter) + result.markdown;
+      // Same hygiene as runRender: render-one must not emit live credentials or
+      // raw base64 payloads either.
+      const cleanFm = sanitizeFrontmatter(result.frontmatter);
+      const cleanMd = sanitizeMarkdown(result.markdown);
+      const output = serializeFrontmatter(cleanFm.frontmatter) + cleanMd.text;
+
+      const totals: Record<string, number> = {};
+      for (const hit of [...cleanFm.hits, ...cleanMd.hits]) {
+        totals[hit.rule] = (totals[hit.rule] ?? 0) + hit.count;
+      }
+      const summary = Object.entries(totals)
+        .map(([rule, count]) => `${rule}×${count}`)
+        .join(", ");
+      if (summary !== "") {
+        process.stderr.write(`ace render-one: redacted ${summary}\n`);
+      }
 
       if (args.o === "-") {
         process.stdout.write(output);
@@ -413,6 +495,20 @@ const doctorCmd = defineCommand({
       await fs.unlink(tmpFile).catch(() => undefined);
     }
 
+    // 4. Power gate probe — proves --skip-on-battery can actually tell.
+    process.stdout.write("\nPower\n");
+    const power = checkPower();
+    if (power.detected) {
+      pass(
+        `power state detected, so --skip-on-battery works here ` +
+          `(would ${power.ok ? "run" : "skip"}) — ${power.detail}`
+      );
+    } else {
+      warn(
+        `${power.detail} — \`ace render --skip-on-battery\` would render anyway (fails open)`
+      );
+    }
+
     process.stdout.write(
       `\n${exitCode === 0 ? "All checks passed." : "Some checks failed — see [FAIL] lines above."}\n`
     );
@@ -498,18 +594,44 @@ plugins: []
   },
 });
 
-// ---- install ---------------------------------------------------------------
+// ---- install / uninstall / status ------------------------------------------
+
+const SCHEDULER_KINDS: SchedulerKind[] = ["launchd", "systemd", "cron"];
+
+/**
+ * Resolve the scheduler kind from the positional argument, falling back to the
+ * one that actually works on this host. Exits 1 on an unknown kind.
+ */
+function resolveKind(command: string, raw: unknown): SchedulerKind {
+  if (raw === undefined || raw === "") {
+    const detected = detectScheduler();
+    process.stderr.write(
+      `ace ${command}: no scheduler given — using ${detected} for ${process.platform}\n`
+    );
+    return detected;
+  }
+  const kind = String(raw) as SchedulerKind;
+  if (!SCHEDULER_KINDS.includes(kind)) {
+    process.stderr.write(
+      `ace ${command}: kind must be one of: ${SCHEDULER_KINDS.join(", ")} (got "${String(raw)}")\n`
+    );
+    process.exit(1);
+  }
+  return kind;
+}
 
 const installCmd = defineCommand({
   meta: {
     name: "install",
-    description: "Install a scheduler job (launchd | systemd | cron)",
+    description:
+      "Install a scheduler job — launchd (macOS), systemd user timer (Linux), or cron",
   },
   args: {
-    _: {
+    kind: {
       type: "positional",
-      description: "Scheduler kind: launchd | systemd | cron",
-      required: true,
+      description:
+        "Scheduler kind: launchd | systemd | cron (default: launchd on macOS, systemd on Linux, cron without a systemd user manager)",
+      required: false,
     },
     at: { type: "string", description: "Daily time HH:MM" },
     every: { type: "string", description: "Repeat interval e.g. 1h, 15m, 30s" },
@@ -520,9 +642,15 @@ const installCmd = defineCommand({
     label: {
       type: "string",
       description: "Job label / service name",
-      default: "dev.ace.render",
+      default: DEFAULT_LABEL,
     },
     log: { type: "string", description: "Log file path override" },
+    "skip-on-battery": {
+      type: "boolean",
+      description:
+        "Add --skip-on-battery to the scheduled render so it no-ops on laptop battery (default on)",
+      default: true,
+    },
     "run-now": {
       type: "boolean",
       description: "Trigger job immediately after install",
@@ -535,12 +663,9 @@ const installCmd = defineCommand({
     },
   },
   async run({ args }) {
-    const kind = args._ as unknown as string;
-    if (!kind || !["launchd", "systemd", "cron"].includes(kind)) {
-      process.stderr.write(
-        "ace install: kind must be one of: launchd, systemd, cron\n"
-      );
-      process.exit(1);
+    const kind = resolveKind("install", args.kind);
+    for (const note of platformNotes(kind)) {
+      process.stderr.write(`ace install: note — ${note}\n`);
     }
 
     const cronMinuteRaw = args["cron-minute"] as string | undefined;
@@ -557,25 +682,29 @@ const installCmd = defineCommand({
       ...(everyArg !== undefined ? { every: everyArg } : {}),
       ...(cronMinute !== undefined ? { cronMinute } : {}),
       ...(logArg !== undefined ? { logPath: logArg } : {}),
+      skipOnBattery: args["skip-on-battery"] as boolean,
       runNow: args["run-now"] as boolean,
       dryRun: args["dry-run"] as boolean,
     };
 
-    switch (kind) {
-      case "launchd":
-        await installLaunchd(shared);
-        break;
-      case "systemd":
-        await installSystemd(shared);
-        break;
-      case "cron":
-        installCron(shared);
-        break;
+    try {
+      switch (kind) {
+        case "launchd":
+          await installLaunchd(shared);
+          break;
+        case "systemd":
+          await installSystemd(shared);
+          break;
+        case "cron":
+          installCron(shared);
+          break;
+      }
+    } catch (err) {
+      process.stderr.write(`ace install ${kind}: ${(err as Error).message}\n`);
+      process.exit(1);
     }
   },
 });
-
-// ---- uninstall -------------------------------------------------------------
 
 const uninstallCmd = defineCommand({
   meta: {
@@ -583,26 +712,19 @@ const uninstallCmd = defineCommand({
     description: "Remove a scheduler install",
   },
   args: {
-    _: {
+    kind: {
       type: "positional",
-      description: "Scheduler kind: launchd | systemd | cron",
-      required: true,
+      description: "Scheduler kind: launchd | systemd | cron (default: this host's)",
+      required: false,
     },
     label: {
       type: "string",
       description: "Job label",
-      default: "dev.ace.render",
+      default: DEFAULT_LABEL,
     },
   },
   async run({ args }) {
-    const kind = args._ as unknown as string;
-    if (!kind || !["launchd", "systemd", "cron"].includes(kind)) {
-      process.stderr.write(
-        "ace uninstall: kind must be one of: launchd, systemd, cron\n"
-      );
-      process.exit(1);
-    }
-
+    const kind = resolveKind("uninstall", args.kind);
     const label = args.label as string;
     switch (kind) {
       case "launchd":
@@ -618,6 +740,50 @@ const uninstallCmd = defineCommand({
   },
 });
 
+const statusCmd = defineCommand({
+  meta: {
+    name: "status",
+    description: "Show whether the scheduled render is installed, and when it last ran",
+  },
+  args: {
+    kind: {
+      type: "positional",
+      description: "Scheduler kind: launchd | systemd | cron (default: this host's)",
+      required: false,
+    },
+    label: { type: "string", description: "Job label", default: DEFAULT_LABEL },
+    log: { type: "string", description: "Log file path override" },
+    json: { type: "boolean", description: "Emit JSON instead of text", default: false },
+  },
+  async run({ args }) {
+    const kind = resolveKind("status", args.kind);
+    const status = await scheduleStatus(
+      kind,
+      args.label as string,
+      args.log as string | undefined
+    );
+    const power = checkPower();
+
+    if (args.json) {
+      process.stdout.write(JSON.stringify({ ...status, power }, null, 2) + "\n");
+      return;
+    }
+
+    process.stdout.write("ace status\n\nScheduler\n");
+    process.stdout.write(formatScheduleStatus(status) + "\n");
+    process.stdout.write(
+      `\nPower\n` +
+        `  a --skip-on-battery run right now would: ${power.ok ? "RUN" : "SKIP"}\n` +
+        `  detail: ${power.detail}\n` +
+        (power.detected
+          ? ""
+          : `  warning: power state undetected — the gate fails open and renders anyway\n`)
+    );
+
+    if (!status.installed) process.exit(1);
+  },
+});
+
 // ---- logs ------------------------------------------------------------------
 
 const logsCmd = defineCommand({
@@ -629,6 +795,11 @@ const logsCmd = defineCommand({
       default: false,
     },
     log: { type: "string", description: "Override log file path" },
+    label: {
+      type: "string",
+      description: "Job label used for the journalctl hint on Linux",
+      default: DEFAULT_LABEL,
+    },
   },
   async run({ args }) {
     const logPath = resolveLogPath(args.log as string | undefined);
@@ -641,7 +812,7 @@ const logsCmd = defineCommand({
     if (process.platform === "linux" && !args.log) {
       process.stderr.write(
         `Tip: on Linux you can also view logs with:\n` +
-          `  journalctl --user -u dev.ace.render\n\n`
+          `  journalctl --user -u ${args.label as string}\n\n`
       );
     }
 
@@ -694,6 +865,7 @@ const main = defineCommand({
     init: initCmd,
     install: installCmd,
     uninstall: uninstallCmd,
+    status: statusCmd,
     logs: logsCmd,
   },
 });

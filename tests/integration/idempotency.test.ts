@@ -36,6 +36,9 @@ beforeAll(async () => {
     "utf8"
   );
 
+  // Every other registered source is disabled explicitly: a source missing from
+  // this list defaults to enabled and would render the developer's live
+  // sessions, so "second run skips all" would depend on machine state.
   const config = {
     output: outDir,
     strategy: "mtime",
@@ -47,6 +50,7 @@ beforeAll(async () => {
       codex: { enabled: false },
       pi: { enabled: false },
       opencode: { enabled: false },
+      omp: { enabled: false },
     },
   };
 
