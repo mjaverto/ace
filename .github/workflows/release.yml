@@ -64,16 +64,8 @@ jobs:
           cache: "npm"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Upgrade npm to latest (required for OIDC trusted publishing)
-        if: steps.skip_check.outputs.skip != 'true'
-        run: npm install -g npm@latest
-
       - name: Install dependencies
         if: steps.skip_check.outputs.skip != 'true'
-        # npm 12 blocks lifecycle scripts by default, so better-sqlite3 never
-        # builds/fetches its native binding and the opencode tests that open a
-        # real SQLite file fail with "Could not locate the bindings file".
-        # ci.yml is unaffected because it does not upgrade npm past 10.
         run: npm ci
 
       - name: Typecheck
@@ -146,6 +138,16 @@ jobs:
             exit 1
           fi
           echo "npm pack --dry-run: ${file_count} file(s) will be published."
+
+      - name: Upgrade npm to latest (required for OIDC trusted publishing)
+        if: steps.skip_check.outputs.skip != 'true'
+        # Deliberately AFTER install/typecheck/build/test. npm 12 blocks package
+        # lifecycle scripts by default, so installing under it leaves
+        # better-sqlite3 without its native binding and the opencode tests that
+        # open a real SQLite file fail with "Could not locate the bindings file".
+        # ci.yml never hit this because it does not upgrade npm. Only `npm
+        # publish` needs the newer npm, so upgrade at the last possible moment.
+        run: npm install -g npm@latest
 
       - name: Publish to npm (OIDC trusted publisher, with provenance)
         if: steps.skip_check.outputs.skip != 'true'
