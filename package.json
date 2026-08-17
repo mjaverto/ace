@@ -1,7 +1,7 @@
 {
   "name": "@mjaverto/ace",
   "version": "0.1.1",
-  "description": "Agent Conversation Exporter — render Claude Code, Codex, Pi, opencode transcripts to Markdown",
+  "description": "Agent Conversation Exporter \u2014 render Claude Code, Codex, Pi, opencode transcripts to Markdown",
   "type": "module",
   "bin": {
     "ace": "./dist/cli.js"
@@ -66,6 +66,9 @@
     "typescript": "^5.6",
     "vitest": "^2"
   },
+  "allowScripts": [
+    "better-sqlite3"
+  ],
   "dependencies": {
     "better-sqlite3": "^12.9.0",
     "citty": "^0.1.6",

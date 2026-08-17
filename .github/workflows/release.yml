@@ -74,7 +74,7 @@ jobs:
         # builds/fetches its native binding and the opencode tests that open a
         # real SQLite file fail with "Could not locate the bindings file".
         # ci.yml is unaffected because it does not upgrade npm past 10.
-        run: npm ci --allow-scripts=better-sqlite3
+        run: npm ci
 
       - name: Typecheck
         if: steps.skip_check.outputs.skip != 'true'
