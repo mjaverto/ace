@@ -56,7 +56,11 @@ jobs:
         if: steps.skip_check.outputs.skip != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          # Must satisfy npm@latest's own engines field. npm 12 requires
+          # ^22.22.2 || ^24.15.0 || >=26.0.0, so Node 20 made the
+          # "Upgrade npm to latest" step below fail with EBADENGINE.
+          # 24 also matches what ace actually runs on in production.
+          node-version: "24"
           cache: "npm"
           registry-url: "https://registry.npmjs.org"
 
