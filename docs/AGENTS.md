@@ -37,7 +37,7 @@ type RenderResultLine = {
 | ------------------- | ----------------------------------------------------------------------- |
 | `--source <name>`   | Restrict to one source (`claude`, `codex`, `pi`, `omp`, `opencode`, …). |
 | `--out <dir>`       | Override config `output`. Useful for sandboxed agent invocations.       |
-| `--force`           | Re-render everything; ignore the incremental cache.                     |
+| `--force`           | Re-render everything, ignoring the incremental cache; notes whose content is unchanged are left untouched, drifted/damaged ones are rewritten. |
 | `--dry-run`         | Print what would be rendered; write nothing.                            |
 | `--strategy index`  | Use a per-output-root index in `~/.local/state/ace/` (never in the output dir) over per-output-mtime comparison. Use on cloud FS.|
 | `--plugin <module>` | Repeatable. Load an extra `AgentSource` at runtime — no rebuild.        |
@@ -90,7 +90,7 @@ The full set of `x_<source>` keys is documented per source: [`claude`](sources/c
 | 2    | Config error                    | `ace.config.yaml` invalid or missing required keys.                |
 | 3    | Partial failure                 | Some sessions rendered, some errored. Inspect NDJSON for details.  |
 | 4    | No plugin matched               | `--source <name>` didn't resolve to a registered source.           |
-| 5    | State error                     | `index` state file unreadable/corrupt; nothing rendered. Fix/delete the file named on stderr, or rerun with `--force`. |
+| 5    | State error                     | `index` state file unreadable/corrupt; nothing rendered. Cloud-only (evicted) placeholder → download it (open/`cat`) and rerun; else fix/delete the file named on stderr, or rerun with `--force` (re-checks every note against disk). |
 
 ## What "looks like an error but isn't"
 

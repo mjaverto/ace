@@ -12,7 +12,7 @@ export type { AceConfig, SourceConfig, TruncateConfig } from "./config/schema.js
 // Core engine
 export { runRender } from "./core/render.js";
 export type { RunRenderOptions, RenderReport, SourceReport } from "./core/render.js";
-export { needsRender, loadIndex, saveIndex } from "./core/incremental.js";
+export { needsRender, loadIndex, saveIndex, StateError } from "./core/incremental.js";
 export type { IndexEntry, IndexState } from "./core/incremental.js";
 export { atomicWrite, setSourceMtime, sweepTmp } from "./core/atomic-write.js";
 export { walk } from "./core/walk.js";

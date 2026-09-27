@@ -4,7 +4,7 @@
 // after render, relocation (write new, delete old), collision disambiguation,
 // self-heal when an output vanishes, and dry-run staying read-only.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -39,7 +39,13 @@ let rawRoot: string;
 let logs: string[];
 let logger: Logger;
 
+let clock: number;
+
 beforeEach(async () => {
+  // Each render() call advances the clock, so consecutive runs stamp different
+  // `aceRenderedAt` values — unchanged-write checks must normalize them away.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  clock = Date.UTC(2026, 8, 1);
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "ace-render-layout-test-"));
   outDir = path.join(tmpDir, "out");
   rawRoot = path.join(tmpDir, "raw");
@@ -60,6 +66,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -95,11 +102,11 @@ function fakeSource(sessions: FakeSession[]): AgentSource {
         };
       }
     },
-    async render(handle) {
+    async render(handle, ctx) {
       const session = handle.payload as FakeSession;
       return {
         markdown: `# ${session.title}\n\nbody of ${session.file}\n${session.body ?? ""}`,
-        frontmatter: frontmatterFor(session),
+        frontmatter: { ...frontmatterFor(session), aceRenderedAt: ctx.now.toISOString() },
         sourceMtimeMs: session.mtimeMs,
         sourceSizeBytes: session.sizeBytes,
       };
@@ -124,6 +131,7 @@ async function render(
 ): Promise<RenderReport> {
   const registry = new Registry();
   registry.register(fakeSource(sessions));
+  vi.setSystemTime((clock += 60_000));
   return runRender({
     config: configFor(opts.strategy ?? "index", opts.output),
     registry,
@@ -452,8 +460,29 @@ describe("runRender — self-heal and migration", () => {
     const report = await render([s], { output: otherOut });
 
     expect(report.totalRendered).toBe(1);
-    expect(indexPath(otherOut)).not.toBe(indexPath(outDir));
     expect(await exists(indexPath(otherOut))).toBe(true);
+  });
+
+  it("finds the same index for an equivalent output path", async () => {
+    const s = session();
+    await render([s]);
+
+    const report = await render([s], { output: outDir + "/" });
+
+    expect(report.totalSkipped).toBe(1);
+  });
+
+  it("leaves a legacy index alone on --dry-run", async () => {
+    const s = session();
+    await render([s]);
+    const legacy = path.join(outDir, ".ace.state.json");
+    await fs.rename(indexPath(outDir), legacy);
+    const bytes = await fs.readFile(legacy, "utf8");
+
+    await render([s], { dryRun: true });
+
+    expect(await fs.readFile(legacy, "utf8")).toBe(bytes);
+    expect(await exists(indexPath(outDir))).toBe(false);
   });
 });
 
@@ -465,6 +494,8 @@ describe("runRender — state safety and unchanged writes", () => {
   it.each([
     ["corrupt JSON", async (p: string) => fs.writeFile(p, "{not json", "utf8")],
     ["unreadable file (EISDIR)", async (p: string) => fs.mkdir(p)],
+    ["null", async (p: string) => fs.writeFile(p, "null", "utf8")],
+    ["an array", async (p: string) => fs.writeFile(p, "[]", "utf8")],
   ])("aborts before writing anything on %s", async (_label, breakIndex) => {
     const s = session();
     await render([s]);
@@ -490,13 +521,25 @@ describe("runRender — state safety and unchanged writes", () => {
     expect(Object.keys(await loadIndex(outDir))).toEqual([`${SOURCE_NAME}/${handleId(s)}`]);
   });
 
-  it("does not rewrite unchanged notes under --force, but writes changed ones", async () => {
+  it("--force rewrites a damaged note", async () => {
     const s = session();
-    await render([s], { force: true });
+    await render([s]);
+    const note = expectedAbsPath(s);
+    await fs.writeFile(note, "junk", "utf8");
+
+    const report = await render([s], { force: true });
+
+    expect(report.totalRendered).toBe(1);
+    expect(await fs.readFile(note, "utf8")).toContain("body of a.jsonl");
+  });
+
+  it.each(["index", "mtime"] as const)("does not rewrite unchanged notes under --force (%s), but writes changed ones", async (strategy) => {
+    const s = session();
+    await render([s], { force: true, strategy });
     const note = expectedAbsPath(s);
     const before = await fs.stat(note);
 
-    const again = await render([s], { force: true });
+    const again = await render([s], { force: true, strategy });
     expect(again.totalRendered).toBe(0);
     expect(again.totalUnchanged).toBe(1);
     expect(again.sources[0]?.entries[0]?.status).toBe("skipped");
@@ -504,7 +547,7 @@ describe("runRender — state safety and unchanged writes", () => {
     expect(after.ino).toBe(before.ino);
     expect(after.mtimeMs).toBe(before.mtimeMs);
 
-    const changed = await render([{ ...s, body: "new turn\n" }], { force: true });
+    const changed = await render([{ ...s, body: "new turn\n" }], { force: true, strategy });
     expect(changed.totalRendered).toBe(1);
     expect(await fs.readFile(note, "utf8")).toContain("new turn");
   });

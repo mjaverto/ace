@@ -115,7 +115,7 @@ One-shot incremental render of every configured source.
 | `--source <name>`        | (all enabled)      | Restrict to one source (`claude`, `codex`, `pi`, `omp`, `opencode`, …). |
 | `--out <dir>`            | from config        | Override config `output`.                                            |
 | `--dry-run`              | `false`            | Print what would be rendered; write nothing.                         |
-| `--force`                | `false`            | Ignore the incremental cache; re-render everything.                  |
+| `--force`                | `false`            | Ignore the incremental cache; re-render everything, but leave notes whose content is unchanged untouched (drifted/damaged notes are rewritten). |
 | `--strategy mtime\|index`| from config        | Override config `strategy`.                                          |
 | `--plugin <module>`      | (none)             | Repeatable. Load extra `AgentSource` modules at runtime.             |
 | `--concurrency <n>`      | `os.cpus().length` | Render parallelism.                                                  |
@@ -184,7 +184,7 @@ Resolves the platform log path and prints it.
 | 2    | Config error                    |
 | 3    | Partial failure (some rendered, some failed) |
 | 4    | No plugin matched               |
-| 5    | State error — the `index` file exists but can't be read or parsed; nothing was rendered. Fix or delete the file named on stderr, or rerun with `--force` to rebuild it. |
+| 5    | State error — the `index` file exists but can't be read or parsed; nothing was rendered. If it is a cloud-only (evicted) placeholder, download it (open/`cat` the file) and rerun; otherwise fix or delete the file named on stderr, or rerun with `--force` — either re-checks every note against disk. |
 
 The human summary reads `rendered=N skipped=N errors=N unchanged=N`. `unchanged` counts sessions that were re-rendered but produced a note byte-identical to the one on disk (ignoring the `aceRenderedAt` stamp); those files are left untouched so cloud-sync clients don't re-upload them. In `--json` NDJSON they appear as `"status":"skipped"`.
 

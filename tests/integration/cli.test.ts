@@ -304,6 +304,16 @@ describe("ace render with a corrupt index", () => {
     };
     const before = await snapshot();
 
+    // Change the session so a run that didn't abort would have to write.
+    const sessionFile = path.join(claudeRoot, "test-project", "a1b2c3d4-e5f6-7890-abcd-ef1234567890.jsonl");
+    const line = JSON.stringify({
+      type: "user",
+      sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      timestamp: "2026-05-01T10:05:00.000Z",
+      message: { role: "user", content: "One more question after the index broke." },
+    });
+    await fs.appendFile(sessionFile, line + "\n", "utf8");
+
     const { exitCode, stderr } = await ace([...args, "--json"]);
 
     expect(exitCode).toBe(5);

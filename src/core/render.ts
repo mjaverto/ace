@@ -138,7 +138,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
     } catch (err) {
       // `--force` is the documented recovery path for a broken index.
       if (!force || !(err instanceof StateError)) throw err;
-      logger.warn(`[runRender] ignoring unreadable index (--force): ${err.message}`);
+      logger.warn(`[runRender] --force: ignoring unreadable index; it will be rebuilt (${err.problem})`);
     }
   }
 
@@ -360,7 +360,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
         // still makes cloud-sync clients re-upload the note (issue #14).
         let written = false;
         try {
-          if (!(await outputUnchanged(absOutPath, hash, previousEntry))) {
+          if (!(await outputUnchanged(absOutPath, hash, force ? undefined : previousEntry))) {
             await atomicWrite(absOutPath, fullContent, { tmpDir: path.join(stateDir(), "tmp") });
             written = true;
           }
@@ -437,7 +437,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
     if (pruned > 0) {
       logger.info(`[runRender] pruned ${pruned} pre-layout index entr${pruned === 1 ? "y" : "ies"}`);
     }
-    await saveIndex(outputRoot, indexState);
+    await saveIndex(outputRoot, indexState, logger);
   }
 
   const totalRendered = reports.reduce((n, r) => n + r.rendered, 0);

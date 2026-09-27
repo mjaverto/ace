@@ -1,11 +1,12 @@
 // src/core/incremental.ts — incremental render decisions
 
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { atomicWrite } from "./atomic-write.js";
 import { contentHash } from "../frontmatter.js";
+import { stateHome } from "../shared/util.js";
+import type { Logger } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Index state types
@@ -41,8 +42,7 @@ const LEGACY_INDEX_FILENAME = ".ace.state.json";
  * folder that can evict files to dataless placeholders (issue #14).
  */
 export function stateDir(): string {
-  const base = process.env["XDG_STATE_HOME"] || path.join(os.homedir(), ".local", "state");
-  return path.join(base, "ace");
+  return path.join(stateHome(), "ace");
 }
 
 /** Index file for one output root; keyed by its resolved path so `--out` overrides never share entries. */
@@ -53,13 +53,18 @@ export function indexPath(outputRoot: string): string {
 
 /** The index exists but cannot be trusted; rendering must not proceed on a guess. */
 export class StateError extends Error {
+  /** One-line problem statement without remediation — for callers that already recover (`--force`). */
+  readonly problem: string;
+
   constructor(file: string, cause: unknown) {
-    const why = cause instanceof Error ? cause.message : String(cause);
+    const problem = `cannot read index ${file}: ${cause instanceof Error ? cause.message : String(cause)}`;
     super(
-      `cannot read index ${file}: ${why}\n` +
-        `Fix or delete that file, or run with --force to rebuild it.`
+      `${problem}\n` +
+        `If it is a cloud-only (evicted) placeholder, download it (open/cat the file) and rerun. ` +
+        `Otherwise fix or delete it, or rerun with --force; either re-checks every note against disk.`
     );
     this.name = "StateError";
+    this.problem = problem;
   }
 }
 
@@ -172,10 +177,22 @@ export async function loadIndex(outputRoot: string): Promise<IndexState> {
   return {};
 }
 
-/** Write the index to the state dir, then drop any legacy in-output copy. */
-export async function saveIndex(outputRoot: string, state: IndexState): Promise<void> {
+/**
+ * Write the index to the state dir, then drop any legacy in-output copy.
+ * Legacy removal is best-effort: the new index is already durable.
+ */
+export async function saveIndex(
+  outputRoot: string,
+  state: IndexState,
+  logger?: Pick<Logger, "warn">
+): Promise<void> {
   await atomicWrite(indexPath(outputRoot), JSON.stringify(state, null, 2) + "\n");
-  await fs.rm(path.join(outputRoot, LEGACY_INDEX_FILENAME), { force: true });
+  const legacy = path.join(outputRoot, LEGACY_INDEX_FILENAME);
+  try {
+    await fs.rm(legacy, { force: true });
+  } catch (err) {
+    logger?.warn(`[saveIndex] could not remove legacy index ${legacy}:`, err);
+  }
 }
 
 // ---------------------------------------------------------------------------
