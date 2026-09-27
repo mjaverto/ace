@@ -2,7 +2,11 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { atomicWrite } from "./atomic-write.js";
+import { contentHash } from "../frontmatter.js";
+import { stateHome } from "../shared/util.js";
+import type { Logger } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Index state types
@@ -22,11 +26,50 @@ export interface IndexEntry {
    * by {@link pruneLegacyEntries} once their session has been re-rendered).
    */
   outPath: string;
+  /** sha256 of the written Markdown with `aceRenderedAt` blanked — see `contentHash`. */
+  contentHash?: string;
 }
 
 export type IndexState = Record<string, IndexEntry>;
 
-const INDEX_FILENAME = ".ace.state.json";
+/** Pre-#14 location of the index, inside the output root. Read once, then removed. */
+const LEGACY_INDEX_FILENAME = ".ace.state.json";
+
+/**
+ * ace's private state dir: `${XDG_STATE_HOME:-~/.local/state}/ace`.
+ *
+ * Kept out of the output root on purpose — output often lives in a cloud-sync
+ * folder that can evict files to dataless placeholders (issue #14).
+ */
+export function stateDir(): string {
+  return path.join(stateHome(), "ace");
+}
+
+/** Index file for one output root; keyed by its resolved path so `--out` overrides never share entries. */
+export function indexPath(outputRoot: string): string {
+  const id = createHash("sha256").update(path.resolve(outputRoot)).digest("hex").slice(0, 16);
+  return path.join(stateDir(), `index-${id}.json`);
+}
+
+/** The index exists but cannot be trusted; rendering must not proceed on a guess. */
+export class StateError extends Error {
+  /**
+   * @param problem One-line statement without remediation — for callers that
+   *   recover (`--force`) or re-throw with different advice.
+   */
+  constructor(
+    readonly problem: string,
+    remedy = "If it is a cloud-only (evicted) placeholder, download it (open/cat the file) and rerun. " +
+      "Otherwise fix or delete it, or rerun with --force; either re-checks every note against disk."
+  ) {
+    super(`${problem}\n${remedy}`);
+    this.name = "StateError";
+  }
+}
+
+function unreadable(file: string, cause: unknown): StateError {
+  return new StateError(`cannot read index ${file}: ${cause instanceof Error ? cause.message : String(cause)}`);
+}
 
 // ---------------------------------------------------------------------------
 // needsRender
@@ -108,21 +151,100 @@ export function pruneLegacyEntries(state: IndexState): number {
 // loadIndex / saveIndex
 // ---------------------------------------------------------------------------
 
+/**
+ * Load the index for `outputRoot`. Missing file → `{}` (falling back once to the
+ * legacy `<outputRoot>/.ace.state.json`). Anything else — unreadable, evicted
+ * cloud placeholder, bad JSON — throws {@link StateError}: an empty index here
+ * would re-render and rewrite every note.
+ */
 export async function loadIndex(outputRoot: string): Promise<IndexState> {
-  const indexPath = path.join(outputRoot, INDEX_FILENAME);
-  try {
-    const raw = await fs.readFile(indexPath, "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as IndexState;
+  return (await readIndex(outputRoot)).state;
+}
+
+/** {@link loadIndex}, also reporting whether the state came from the legacy in-output file. */
+export async function readIndex(outputRoot: string): Promise<{ state: IndexState; fromLegacy: boolean }> {
+  const legacy = path.join(outputRoot, LEGACY_INDEX_FILENAME);
+  for (const file of [indexPath(outputRoot), legacy]) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw unreadable(file, err);
     }
-    return {};
-  } catch {
-    return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw unreadable(file, err);
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw unreadable(file, "not a JSON object");
+    }
+    return { state: parsed as IndexState, fromLegacy: file === legacy };
+  }
+  return { state: {}, fromLegacy: false };
+}
+
+/**
+ * Write the index to the state dir. With `removeLegacy` (the run that migrated
+ * from it), then drop the legacy in-output copy — best-effort, since the new
+ * index is already durable. Otherwise a legacy file (e.g. kept alive by an older
+ * ace sharing the output) is left alone; it is ignored once this index exists.
+ */
+export async function saveIndex(
+  outputRoot: string,
+  state: IndexState,
+  opts: { removeLegacy?: boolean; logger?: Pick<Logger, "warn"> } = {}
+): Promise<void> {
+  await atomicWrite(indexPath(outputRoot), JSON.stringify(state, null, 2) + "\n");
+  if (!opts.removeLegacy) return;
+  const legacy = path.join(outputRoot, LEGACY_INDEX_FILENAME);
+  try {
+    await fs.rm(legacy, { force: true });
+  } catch (err) {
+    opts.logger?.warn(`[saveIndex] could not remove legacy index ${legacy}:`, err);
   }
 }
 
-export async function saveIndex(outputRoot: string, state: IndexState): Promise<void> {
-  const indexPath = path.join(outputRoot, INDEX_FILENAME);
-  await atomicWrite(indexPath, JSON.stringify(state, null, 2) + "\n");
+// ---------------------------------------------------------------------------
+// Unchanged-output check
+// ---------------------------------------------------------------------------
+
+/**
+ * True when `dest` already holds `content` (hash `hash`), so writing would be a
+ * no-op apart from `aceRenderedAt`. Missing `dest` → false. Trusts the index
+ * entry when it recorded this exact path + hash. A size mismatch → false without
+ * reading (the ISO stamp is fixed-width, and cloud-only placeholders keep their
+ * logical size, so no download is triggered). Otherwise reads and hashes `dest`.
+ *
+ * Never turns a failure into a write: a stat/read error other than ENOENT
+ * throws, so the caller leaves an unreadable (e.g. evicted) note alone.
+ */
+export async function outputUnchanged(
+  dest: string,
+  content: string,
+  hash: string,
+  entry: IndexEntry | undefined
+): Promise<boolean> {
+  let size: number;
+  try {
+    size = (await fs.stat(dest)).size;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+  if (entry?.contentHash === hash && entry.outPath === dest) return true;
+  if (size !== Buffer.byteLength(content)) return false;
+  let existing: string;
+  try {
+    existing = await fs.readFile(dest, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error(
+      `existing note ${dest} could not be read for comparison (maybe a cloud-only placeholder); ` +
+        `left untouched, will retry next run: ${(err as Error).message}`
+    );
+  }
+  return contentHash(existing) === hash;
 }

@@ -6,6 +6,7 @@ import path from "node:path";
 import os from "node:os";
 import { loadConfig } from "./config/load.js";
 import { runRender } from "./core/render.js";
+import { StateError } from "./core/incremental.js";
 import { expandHome } from "./shared/util.js";
 import { serializeFrontmatter } from "./frontmatter.js";
 import { sanitizeFrontmatter, sanitizeMarkdown } from "./core/redact.js";
@@ -185,6 +186,10 @@ const renderCmd = defineCommand({
         : {}),
       ...(sources.length > 0 ? { sourceFilter: sources } : {}),
       ...(concurrency !== undefined ? { concurrency } : {}),
+    }).catch((err: unknown) => {
+      if (!(err instanceof StateError)) throw err;
+      process.stderr.write(`ace: state error — ${err.message}\n`);
+      process.exit(5);
     });
 
     if (args.json) {
@@ -202,11 +207,11 @@ const renderCmd = defineCommand({
     } else {
       for (const s of report.sources) {
         process.stderr.write(
-          `  ${s.sourceName}: rendered=${s.rendered} skipped=${s.skipped} errors=${s.errors.length}\n`
+          `  ${s.sourceName}: rendered=${s.rendered} skipped=${s.skipped} errors=${s.errors.length} unchanged=${s.unchanged}\n`
         );
       }
       process.stderr.write(
-        `\nrendered=${report.totalRendered} skipped=${report.totalSkipped} errors=${report.totalErrors} (${report.durationMs}ms)\n`
+        `\nrendered=${report.totalRendered} skipped=${report.totalSkipped} errors=${report.totalErrors} unchanged=${report.totalUnchanged} (${report.durationMs}ms)\n`
       );
     }
 

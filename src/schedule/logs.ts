@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fsSync, { type Stats } from "node:fs";
 import { spawn } from "node:child_process";
+import { stateHome } from "../shared/util.js";
 
 /** Returns the per-platform default log path for ace. */
 export function resolveLogPath(logOverride?: string): string {
@@ -15,10 +16,7 @@ export function resolveLogPath(logOverride?: string): string {
   }
 
   // Linux — XDG_STATE_HOME / ~/.local/state/ace/ace.log
-  const xdgState =
-    process.env["XDG_STATE_HOME"] ??
-    path.join(os.homedir(), ".local", "state");
-  return path.join(xdgState, "ace", "ace.log");
+  return path.join(stateHome(), "ace", "ace.log");
 }
 
 /**

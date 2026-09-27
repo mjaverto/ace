@@ -1,5 +1,6 @@
 // src/frontmatter.ts — canonical frontmatter serializer
 
+import { createHash } from "node:crypto";
 import { stringify } from "yaml";
 import type { Frontmatter } from "./types.js";
 
@@ -98,4 +99,22 @@ export function serializeFrontmatter(fm: Frontmatter): string {
   });
 
   return `---\n${yaml}---\n`;
+}
+
+/**
+ * sha256 of a rendered note with the `aceRenderedAt:` line blanked — only inside
+ * the leading `---` frontmatter block, never in the body. Two renders of the
+ * same session differ only in that wall-clock stamp, so equal hashes mean the
+ * existing file can be left alone (no byte change → no cloud re-upload).
+ */
+export function contentHash(markdown: string): string {
+  let normalized = markdown;
+  if (markdown.startsWith("---\n")) {
+    const end = markdown.indexOf("\n---\n", 3);
+    if (end !== -1) {
+      const head = markdown.slice(0, end).replace(/^aceRenderedAt:.*$/m, "aceRenderedAt:");
+      normalized = head + markdown.slice(end);
+    }
+  }
+  return createHash("sha256").update(normalized).digest("hex");
 }

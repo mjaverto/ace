@@ -43,16 +43,33 @@ export async function sweepTmp(dir: string): Promise<void> {
 export interface AtomicWriteOptions {
   /** If true, skip fsync (useful in tests). Default: false */
   noFsync?: boolean;
+  /**
+   * Stage the temp file here instead of next to `absPath`, so sync clients
+   * watching the destination never see it. Falls back to the destination dir
+   * when staging there fails or the rename would cross filesystems (EXDEV).
+   *
+   * Invariant (issue #14): on macOS a file renamed over a tracked FileProvider
+   * item (Google Drive, iCloud) keeps the target's document ID only when the
+   * temp was created OUTSIDE the provider domain. A same-dir temp can get its
+   * own ID and replace the cloud item — or linger as a synced item itself.
+   */
+  tmpDir?: string;
+  /** Called once per destination dir when `tmpDir` staging fails and same-dir staging takes over. */
+  onFallback?: (dir: string, err: unknown) => void;
 }
+
+/** Destination dirs where `tmpDir` staging failed once; they stage next to the file for the rest of the run. */
+const sameDirStaging = new Set<string>();
 
 /**
  * Write `contents` to `absPath` atomically.
  *
- * 1. Writes to `${absPath}.tmp-${pid}-${rand}` in the same directory.
+ * 1. Writes a temp file — in `opts.tmpDir` if given, else next to `absPath`.
  * 2. fsyncs the temp file (best-effort; errors are swallowed).
- * 3. Renames the temp file to `absPath`.
+ * 3. Renames the temp file to `absPath` (retrying from the destination dir on EXDEV).
  *
- * Also calls `sweepTmp` on the directory once per process run.
+ * The temp file is removed on any failure. Also calls `sweepTmp` on the temp
+ * dir once per process run.
  */
 export async function atomicWrite(
   absPath: string,
@@ -61,28 +78,71 @@ export async function atomicWrite(
 ): Promise<void> {
   const dir = path.dirname(absPath);
   await fs.mkdir(dir, { recursive: true });
-
-  // Sweep stale tmps once per dir per run
-  await sweepTmp(dir);
-
-  const rand = randomBytes(4).toString("hex");
-  const tmpPath = `${absPath}.tmp-${process.pid}-${rand}`;
-
-  await fs.writeFile(tmpPath, contents, { encoding: "utf8" });
-
-  if (!opts.noFsync) {
-    let fd: import("node:fs/promises").FileHandle | undefined;
+  if (opts.tmpDir !== undefined && !sameDirStaging.has(dir)) {
+    let tmpPath: string | undefined;
     try {
-      fd = await fs.open(tmpPath, "r+");
-      await fd.datasync();
-    } catch {
-      // fsync is best-effort — cloud FSes and some network mounts ignore it
-    } finally {
-      await fd?.close().catch(() => undefined);
+      await fs.mkdir(opts.tmpDir, { recursive: true, mode: 0o700 });
+      tmpPath = await stage(absPath, contents, opts.tmpDir, opts.noFsync);
+    } catch (err) {
+      sameDirStaging.add(dir);
+      opts.onFallback?.(dir, err);
+    }
+    if (tmpPath !== undefined) {
+      try {
+        await commit(tmpPath, absPath);
+        return;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
+        sameDirStaging.add(dir);
+        opts.onFallback?.(dir, err);
+      }
     }
   }
+  await commit(await stage(absPath, contents, dir, opts.noFsync), absPath);
+}
 
-  await fs.rename(tmpPath, absPath);
+/** Write + fsync a temp file for `absPath` in `tmpDir`; returns its path. Removed on failure. */
+async function stage(
+  absPath: string,
+  contents: string,
+  tmpDir: string,
+  noFsync = false
+): Promise<string> {
+  // Sweep stale tmps once per dir per run
+  await sweepTmp(tmpDir);
+
+  const rand = randomBytes(4).toString("hex");
+  const tmpPath = path.join(tmpDir, `.tmp-${path.basename(absPath)}-${process.pid}-${rand}`);
+
+  try {
+    await fs.writeFile(tmpPath, contents, { encoding: "utf8" });
+
+    if (!noFsync) {
+      let fd: import("node:fs/promises").FileHandle | undefined;
+      try {
+        fd = await fs.open(tmpPath, "r+");
+        await fd.datasync();
+      } catch {
+        // fsync is best-effort — cloud FSes and some network mounts ignore it
+      } finally {
+        await fd?.close().catch(() => undefined);
+      }
+    }
+    return tmpPath;
+  } catch (err) {
+    await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** Rename `tmpPath` onto `absPath`; the temp is removed if that fails. */
+async function commit(tmpPath: string, absPath: string): Promise<void> {
+  try {
+    await fs.rename(tmpPath, absPath);
+  } catch (err) {
+    await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+    throw err;
+  }
 }
 
 /**

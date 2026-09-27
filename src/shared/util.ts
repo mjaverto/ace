@@ -1,6 +1,8 @@
 // src/shared/util.ts — shared utilities
 
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import readline from "node:readline";
 import { createReadStream } from "node:fs";
 
@@ -49,6 +51,15 @@ export function fmtTs(input: number | string | Date): string {
     return d.toISOString();
   }
   return input;
+}
+
+// ---------------------------------------------------------------------------
+// stateHome
+// ---------------------------------------------------------------------------
+
+/** `$XDG_STATE_HOME`, or `~/.local/state` when unset or empty. */
+export function stateHome(): string {
+  return process.env["XDG_STATE_HOME"] || path.join(os.homedir(), ".local", "state");
 }
 
 // ---------------------------------------------------------------------------

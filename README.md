@@ -61,8 +61,9 @@ output: ~/Drive/_Brain/agent-conversations
 #   mtime  — default. Compare source mtime to output mtime. Cheap and stateless.
 #            Requires the output filesystem to preserve mtimes (most do; some
 #            cloud-sync FSes don't — see Troubleshooting).
-#   index  — write a single `<output>/.ace.state.json` index file with per-entry
-#            sha + size + mtime. Use when mtime is unreliable.
+#   index  — keep a per-output-root index (source mtime + size + output content
+#            hash) under $XDG_STATE_HOME/ace (default ~/.local/state/ace),
+#            never inside the output dir. Use when mtime is unreliable.
 strategy: mtime
 
 # Render parallelism. "auto" = os.cpus().length. Or pass an integer.
@@ -114,7 +115,7 @@ One-shot incremental render of every configured source.
 | `--source <name>`        | (all enabled)      | Restrict to one source (`claude`, `codex`, `pi`, `omp`, `opencode`, …). |
 | `--out <dir>`            | from config        | Override config `output`.                                            |
 | `--dry-run`              | `false`            | Print what would be rendered; write nothing.                         |
-| `--force`                | `false`            | Ignore the incremental cache; re-render everything.                  |
+| `--force`                | `false`            | Ignore the incremental cache; re-render everything, but leave notes whose content is unchanged untouched (drifted/damaged notes are rewritten). |
 | `--strategy mtime\|index`| from config        | Override config `strategy`.                                          |
 | `--plugin <module>`      | (none)             | Repeatable. Load extra `AgentSource` modules at runtime.             |
 | `--concurrency <n>`      | `os.cpus().length` | Render parallelism.                                                  |
@@ -183,6 +184,9 @@ Resolves the platform log path and prints it.
 | 2    | Config error                    |
 | 3    | Partial failure (some rendered, some failed) |
 | 4    | No plugin matched               |
+| 5    | State error — the `index` file exists but can't be read or parsed; nothing was rendered. If it is a cloud-only (evicted) placeholder, download it (open/`cat` the file) and rerun; otherwise fix or delete the file named on stderr, or rerun with `--force` — either re-checks every note against disk. |
+
+The human summary reads `rendered=N skipped=N errors=N unchanged=N`. `unchanged` counts sessions that were re-rendered but produced a note byte-identical to the one on disk (ignoring the `aceRenderedAt` stamp); those files are left untouched so cloud-sync clients don't re-upload them. In `--json` NDJSON they appear as `"status":"skipped"`.
 
 ## Output layout
 
@@ -193,8 +197,9 @@ Resolves the platform log path and prints it.
   pi/<workspace-slug>/<ts>_<uuid>.md
   omp/<workspace-slug>/<ts>_<uuid>.md
   opencode/<project-slug>/<session_id>.md
-  .ace.state.json          # only when strategy = index
 ```
+
+`ace render` writes only notes under the output root: the `index` state and atomic-write temp files live in `${XDG_STATE_HOME:-~/.local/state}/ace/` (`index-<hash of output root>.json`, `tmp/`). A legacy `<output>/.ace.state.json` from older versions is migrated on the first run without a state-dir index and deleted after that run succeeds; once the state-dir index exists, any legacy file (e.g. one an older ace keeps writing) is ignored and left alone. Exceptions: if staging in the state dir fails or the output is on a different filesystem, temp files are staged next to the note (and removed on failure); `ace doctor` writes and removes a short-lived `.ace-doctor-probe-*` file in the output root.
 
 Top-level dir is the source `name`, so QMD-style indexers and `grep -r` scopes filter trivially.
 
@@ -257,7 +262,7 @@ npx @mjaverto/ace install launchd \
 
 ### "Output mtime not preserved"
 
-Some cloud-sync filesystems (Drive, iCloud, OneDrive) round or rewrite mtimes. The default `mtime` strategy will misbehave there — symptoms include re-rendering everything every run. Run `ace doctor` to confirm; it writes+restats a temp file and reports mtime resolution. If unreliable, switch to `strategy: index` in your config (or pass `--strategy index`). The index strategy stores per-entry sha + mtime + size in a single `<output>/.ace.state.json` file — far friendlier to cloud-sync than per-file sidecars.
+Some cloud-sync filesystems (Drive, iCloud, OneDrive) round or rewrite mtimes. The default `mtime` strategy will misbehave there — symptoms include re-rendering everything every run. Run `ace doctor` to confirm; it writes+restats a temp file and reports mtime resolution. If unreliable, switch to `strategy: index` in your config (or pass `--strategy index`). The index strategy stores per-entry mtime + size + content hash in a single file under `~/.local/state/ace/` (outside the synced folder, so the sync client can't evict it to a cloud-only placeholder). If that file becomes unreadable, `ace render` exits 5 instead of silently re-rendering everything; `--force` rebuilds it without rewriting unchanged notes.
 
 ### "opencode database is locked"
 

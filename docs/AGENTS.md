@@ -37,9 +37,9 @@ type RenderResultLine = {
 | ------------------- | ----------------------------------------------------------------------- |
 | `--source <name>`   | Restrict to one source (`claude`, `codex`, `pi`, `omp`, `opencode`, …). |
 | `--out <dir>`       | Override config `output`. Useful for sandboxed agent invocations.       |
-| `--force`           | Re-render everything; ignore the incremental cache.                     |
+| `--force`           | Re-render everything, ignoring the incremental cache; notes whose content is unchanged are left untouched, drifted/damaged ones are rewritten. |
 | `--dry-run`         | Print what would be rendered; write nothing.                            |
-| `--strategy index`  | Use single-file index over per-output-mtime comparison. Use on cloud FS.|
+| `--strategy index`  | Use a per-output-root index in `~/.local/state/ace/` (never in the output dir) over per-output-mtime comparison. Use on cloud FS.|
 | `--plugin <module>` | Repeatable. Load an extra `AgentSource` at runtime — no rebuild.        |
 | `--config <path>`   | Path to config file. Otherwise `./ace.config.yaml` / `$XDG_CONFIG_HOME`.|
 
@@ -90,6 +90,7 @@ The full set of `x_<source>` keys is documented per source: [`claude`](sources/c
 | 2    | Config error                    | `ace.config.yaml` invalid or missing required keys.                |
 | 3    | Partial failure                 | Some sessions rendered, some errored. Inspect NDJSON for details.  |
 | 4    | No plugin matched               | `--source <name>` didn't resolve to a registered source.           |
+| 5    | State error                     | `index` state file unreadable/corrupt; nothing rendered. Cloud-only (evicted) placeholder → download it (open/`cat`) and rerun; else fix/delete the file named on stderr, or rerun with `--force` (re-checks every note against disk). |
 
 ## What "looks like an error but isn't"
 
@@ -113,4 +114,4 @@ If the user asks you to add a new source (Cursor, Aider, …), the recipe is:
 - **Don't write to `opencode.db`.** ace only ever opens it read-only. Writing risks corrupting a running opencode TUI's state. If your task requires modifying opencode data, do it through opencode's own CLI/API, not by poking the DB.
 - **Don't run ace as root.** It walks user home directories; running as root will read other users' files and write outputs owned by root. There's no scenario in which this is needed.
 - **Don't rely on render order.** ace renders concurrently (`--concurrency`). NDJSON output order is not a stable ordering of sessions.
-- **Don't delete the `.ace.state.json` index** unless you also pass `--force` on the next run. The index is the single source of truth for the `index` strategy.
+- **Don't hand-edit the index.** It lives at `${XDG_STATE_HOME:-~/.local/state}/ace/index-<hash>.json` (one per output root), never in the output dir. Deleting it is safe: the next run re-renders but only writes notes whose content changed. A corrupt/unreadable index aborts with exit 5; `--force` rebuilds it.

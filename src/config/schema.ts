@@ -28,7 +28,7 @@ export const configSchema = z.object({
   /**
    * Incrementality strategy.
    * - `mtime`: compare source vs output file mtime (default).
-   * - `index`: use `.ace.state.json` index file.
+   * - `index`: use per-output-root index under `$XDG_STATE_HOME/ace`.
    */
   strategy: z.enum(["mtime", "index"]).default("mtime"),
 
