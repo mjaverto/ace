@@ -8,7 +8,7 @@ import type { AceConfig } from "../config/schema.js";
 import type { Registry } from "../registry.js";
 import {
   needsRender,
-  loadIndex,
+  readIndex,
   saveIndex,
   pruneLegacyEntries,
   outputUnchanged,
@@ -141,9 +141,10 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
 
   // Load index state if needed
   let indexState: IndexState = {};
+  let migratingLegacy = false;
   if (strategy === "index") {
     try {
-      indexState = await loadIndex(outputRoot);
+      ({ state: indexState, fromLegacy: migratingLegacy } = await readIndex(outputRoot));
     } catch (err) {
       // `--force` is the documented recovery path for a broken index.
       if (!force || !(err instanceof StateError)) throw err;
@@ -390,7 +391,11 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
         // -- Write ----------------------------------------------------------
         try {
           if (written) {
-            await atomicWrite(absOutPath, fullContent, { tmpDir: path.join(stateDir(), "tmp") });
+            await atomicWrite(absOutPath, fullContent, {
+              tmpDir: path.join(stateDir(), "tmp"),
+              onFallback: (dir, err) =>
+                logger.warn(`[runRender] staging temp files next to notes in ${dir}:`, err),
+            });
           }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -400,8 +405,12 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
           return;
         }
 
-        // Set output mtime to match source
-        if (written && strategy === "mtime") {
+        // Output mtime tracks the source. An unchanged note older than its
+        // source is re-stamped (metadata only) so the next run skips it.
+        if (
+          strategy === "mtime" &&
+          (written || ((await fs.stat(absOutPath).catch(() => null))?.mtimeMs ?? Infinity) < result.sourceMtimeMs)
+        ) {
           await setSourceMtime(absOutPath, result.sourceMtimeMs);
         }
 
@@ -465,7 +474,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
     if (pruned > 0) {
       logger.info(`[runRender] pruned ${pruned} pre-layout index entr${pruned === 1 ? "y" : "ies"}`);
     }
-    await saveIndex(outputRoot, indexState, logger);
+    await saveIndex(outputRoot, indexState, { removeLegacy: migratingLegacy, logger });
   }
 
   const totalRendered = reports.reduce((n, r) => n + r.rendered, 0);

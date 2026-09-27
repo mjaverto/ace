@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runRender, type RenderReport } from "../../src/core/render.js";
-import { indexPath, loadIndex, StateError } from "../../src/core/incremental.js";
+import { indexPath, loadIndex, stateDir, StateError } from "../../src/core/incremental.js";
 import { buildRelPath, disambiguator, rawRelPathFor } from "../../src/core/naming.js";
 import { Registry } from "../../src/registry.js";
 import type { AceConfig } from "../../src/config/schema.js";
@@ -453,6 +453,22 @@ describe("runRender — self-heal and migration", () => {
     expect(await exists(indexPath(outDir))).toBe(true);
   });
 
+  it("ignores a legacy index recreated after migration", async () => {
+    const s = session();
+    await render([s]);
+    await fs.rename(indexPath(outDir), path.join(outDir, ".ace.state.json"));
+    await render([s]); // migrates
+    // An older ace sharing the output writes its own legacy file again.
+    const legacy = path.join(outDir, ".ace.state.json");
+    await fs.writeFile(legacy, "{}\n", "utf8");
+
+    const report = await render([s]);
+
+    expect(report.totalSkipped).toBe(1);
+    expect(report.totalRendered + report.totalUnchanged).toBe(0);
+    expect(await fs.readFile(legacy, "utf8")).toBe("{}\n");
+  });
+
   it("keeps a separate index per output root", async () => {
     const s = session();
     await render([s]);
@@ -617,6 +633,57 @@ describe("runRender — state safety and unchanged writes", () => {
     expect(await fs.readFile(note, "utf8")).toContain("new turn");
   });
 
+  it("--force leaves an unchanged non-ASCII note alone (byte length, not string length)", async () => {
+    const s = session({ title: "Café ✓ résumé", body: "naïve — ünïcödé ✓\n" });
+    await render([s], { force: true });
+    const before = await fs.stat(expectedAbsPath(s));
+    const again = await render([s], { force: true });
+    expect(again.totalUnchanged).toBe(1);
+    expect((await fs.stat(expectedAbsPath(s))).ino).toBe(before.ino);
+  });
+
+  it.skipIf(process.getuid?.() === 0)("trusts a matching index hash without reading the note", async () => {
+    const s = session();
+    await render([s]);
+    const note = expectedAbsPath(s);
+    await fs.chmod(note, 0o000);
+    try {
+      const report = await render([{ ...s, mtimeMs: s.mtimeMs + 1 }]);
+      expect(report.totalErrors).toBe(0);
+      expect(report.totalUnchanged).toBe(1);
+    } finally {
+      await fs.chmod(note, 0o644);
+    }
+  });
+
+  it("does not trust a recorded hash for a different output path", async () => {
+    const s = session();
+    await render([s]);
+    const note = expectedAbsPath(s);
+    const other = path.join(outDir, "elsewhere.md");
+    await fs.copyFile(note, other);
+    const state = await loadIndex(outDir);
+    state[`${SOURCE_NAME}/${handleId(s)}`]!.outPath = other;
+    await fs.writeFile(indexPath(outDir), JSON.stringify(state));
+    await fs.writeFile(note, "junk", "utf8");
+
+    const report = await render([{ ...s, mtimeMs: s.mtimeMs + 1 }]);
+
+    expect(report.totalRendered).toBe(1);
+    expect(await fs.readFile(note, "utf8")).toContain("body of a.jsonl");
+  });
+
+  it("stages note temp files in the state dir, not the output tree", async () => {
+    const rename = vi.spyOn(fs, "rename");
+    try {
+      await render([session()]);
+      const note = rename.mock.calls.find((c) => String(c[1]).endsWith(".md"));
+      expect(path.dirname(String(note?.[0]))).toBe(path.join(stateDir(), "tmp"));
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
   it("leaves no temp files or index in the output tree", async () => {
     await render([session({ file: "a.jsonl" }), session({ file: "b.jsonl" })]);
 
@@ -642,6 +709,23 @@ describe("runRender — mtime strategy", () => {
     expect(second.totalRendered).toBe(0);
     expect(second.totalSkipped).toBe(1);
     expect(second.sources[0]?.entries[0]?.outPath).toBe(expectedAbsPath(s));
+  });
+
+  it("re-stamps an unchanged note older than its source so the next run skips", async () => {
+    const s = session();
+    await render([s], { strategy: "mtime" });
+    const note = expectedAbsPath(s);
+    const before = await fs.stat(note);
+    // Source touched, rendered content identical.
+    const touched: FakeSession = { ...s, mtimeMs: before.mtimeMs + 10_000 };
+
+    const first = await render([touched], { strategy: "mtime" });
+    expect(first.totalUnchanged).toBe(1);
+    expect(first.totalRendered).toBe(0);
+
+    const second = await render([touched], { strategy: "mtime" });
+    expect(second.totalSkipped).toBe(1);
+    expect((await fs.stat(note)).ino).toBe(before.ino);
   });
 
   it("writes no index file", async () => {

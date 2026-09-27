@@ -74,4 +74,21 @@ describe("atomicWrite with tmpDir", () => {
     expect(await fs.readFile(dest(), "utf8")).toBe("hello");
     expect(await leftovers(outDir)).toEqual([]);
   });
+
+  it("does not retry next to the file after a non-EXDEV rename failure", async () => {
+    failRename("EACCES", (src) => path.dirname(src) === stageDir);
+    await expect(atomicWrite(dest(), "hello", { tmpDir: stageDir, noFsync: true })).rejects.toMatchObject({ code: "EACCES" });
+    await expect(fs.stat(dest())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes a partially written temp when the write fails", async () => {
+    const real = fs.writeFile.bind(fs);
+    vi.spyOn(fs, "writeFile").mockImplementation(async (p, _d, o) => {
+      await real(p, "partial", o as never);
+      throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+    });
+    await expect(atomicWrite(dest(), "hello", { tmpDir: stageDir, noFsync: true })).rejects.toMatchObject({ code: "ENOSPC" });
+    expect(await leftovers(stageDir)).toEqual([]);
+    expect(await leftovers(outDir)).toEqual([]);
+  });
 });

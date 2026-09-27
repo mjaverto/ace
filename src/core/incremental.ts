@@ -158,7 +158,13 @@ export function pruneLegacyEntries(state: IndexState): number {
  * would re-render and rewrite every note.
  */
 export async function loadIndex(outputRoot: string): Promise<IndexState> {
-  for (const file of [indexPath(outputRoot), path.join(outputRoot, LEGACY_INDEX_FILENAME)]) {
+  return (await readIndex(outputRoot)).state;
+}
+
+/** {@link loadIndex}, also reporting whether the state came from the legacy in-output file. */
+export async function readIndex(outputRoot: string): Promise<{ state: IndexState; fromLegacy: boolean }> {
+  const legacy = path.join(outputRoot, LEGACY_INDEX_FILENAME);
+  for (const file of [indexPath(outputRoot), legacy]) {
     let raw: string;
     try {
       raw = await fs.readFile(file, "utf8");
@@ -175,26 +181,29 @@ export async function loadIndex(outputRoot: string): Promise<IndexState> {
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw unreadable(file, "not a JSON object");
     }
-    return parsed as IndexState;
+    return { state: parsed as IndexState, fromLegacy: file === legacy };
   }
-  return {};
+  return { state: {}, fromLegacy: false };
 }
 
 /**
- * Write the index to the state dir, then drop any legacy in-output copy.
- * Legacy removal is best-effort: the new index is already durable.
+ * Write the index to the state dir. With `removeLegacy` (the run that migrated
+ * from it), then drop the legacy in-output copy — best-effort, since the new
+ * index is already durable. Otherwise a legacy file (e.g. kept alive by an older
+ * ace sharing the output) is left alone; it is ignored once this index exists.
  */
 export async function saveIndex(
   outputRoot: string,
   state: IndexState,
-  logger?: Pick<Logger, "warn">
+  opts: { removeLegacy?: boolean; logger?: Pick<Logger, "warn"> } = {}
 ): Promise<void> {
   await atomicWrite(indexPath(outputRoot), JSON.stringify(state, null, 2) + "\n");
+  if (!opts.removeLegacy) return;
   const legacy = path.join(outputRoot, LEGACY_INDEX_FILENAME);
   try {
     await fs.rm(legacy, { force: true });
   } catch (err) {
-    logger?.warn(`[saveIndex] could not remove legacy index ${legacy}:`, err);
+    opts.logger?.warn(`[saveIndex] could not remove legacy index ${legacy}:`, err);
   }
 }
 

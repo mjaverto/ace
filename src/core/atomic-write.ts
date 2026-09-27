@@ -54,6 +54,8 @@ export interface AtomicWriteOptions {
    * own ID and replace the cloud item — or linger as a synced item itself.
    */
   tmpDir?: string;
+  /** Called once per destination dir when `tmpDir` staging fails and same-dir staging takes over. */
+  onFallback?: (dir: string, err: unknown) => void;
 }
 
 /** Destination dirs where `tmpDir` staging failed once; they stage next to the file for the rest of the run. */
@@ -81,8 +83,9 @@ export async function atomicWrite(
     try {
       await fs.mkdir(opts.tmpDir, { recursive: true, mode: 0o700 });
       tmpPath = await stage(absPath, contents, opts.tmpDir, opts.noFsync);
-    } catch {
+    } catch (err) {
       sameDirStaging.add(dir);
+      opts.onFallback?.(dir, err);
     }
     if (tmpPath !== undefined) {
       try {
@@ -91,6 +94,7 @@ export async function atomicWrite(
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
         sameDirStaging.add(dir);
+        opts.onFallback?.(dir, err);
       }
     }
   }
