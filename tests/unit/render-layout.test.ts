@@ -127,7 +127,7 @@ function configFor(strategy: "mtime" | "index", output = outDir): AceConfig {
 
 async function render(
   sessions: FakeSession[],
-  opts: { strategy?: "mtime" | "index"; dryRun?: boolean; force?: boolean; output?: string } = {}
+  opts: { strategy?: "mtime" | "index"; dryRun?: boolean; force?: boolean; output?: string; source?: string } = {}
 ): Promise<RenderReport> {
   const registry = new Registry();
   registry.register(fakeSource(sessions));
@@ -138,6 +138,7 @@ async function render(
     logger,
     ...(opts.dryRun === undefined ? {} : { dryRun: opts.dryRun }),
     ...(opts.force === undefined ? {} : { force: opts.force }),
+    ...(opts.source === undefined ? {} : { sourceFilter: opts.source }),
   });
 }
 
@@ -519,6 +520,70 @@ describe("runRender — state safety and unchanged writes", () => {
 
     expect(report.totalErrors).toBe(0);
     expect(Object.keys(await loadIndex(outDir))).toEqual([`${SOURCE_NAME}/${handleId(s)}`]);
+  });
+
+  it("--force --source refuses to rebuild a corrupt index", async () => {
+    const s = session();
+    await render([s]);
+    const note = expectedAbsPath(s);
+    const before = await fs.stat(note);
+    await fs.writeFile(indexPath(outDir), "{not json", "utf8");
+
+    const run = render([{ ...s, body: "changed" }], { force: true, source: SOURCE_NAME });
+
+    await expect(run).rejects.toThrow(/--source/);
+    await expect(run).rejects.toBeInstanceOf(StateError);
+    expect((await fs.stat(note)).mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("dry-run after a lost index reports unchanged notes, not writes", async () => {
+    const s = session();
+    await render([s]);
+    await fs.rm(indexPath(outDir));
+
+    const report = await render([s], { dryRun: true });
+
+    expect(report.totalUnchanged).toBe(1);
+    expect(report.totalRendered).toBe(0);
+    expect(logs.some((l) => l.includes("would write"))).toBe(false);
+  });
+
+  const asRoot = process.getuid?.() === 0;
+
+  it.skipIf(asRoot)("leaves an unreadable same-size note untouched and retries it next run", async () => {
+    const s = session();
+    await render([s]);
+    const note = expectedAbsPath(s);
+    await fs.rm(indexPath(outDir));
+    const before = await fs.stat(note);
+    await fs.chmod(note, 0o000);
+    try {
+      const report = await render([s]);
+      expect(report.totalErrors).toBe(1);
+      expect(report.totalRendered).toBe(0);
+      const after = await fs.stat(note);
+      expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
+      expect(await loadIndex(outDir)).toEqual({});
+    } finally {
+      await fs.chmod(note, 0o644);
+    }
+
+    const retry = await render([s]);
+    expect(retry.totalUnchanged).toBe(1);
+  });
+
+  it.skipIf(asRoot)("rewrites an unreadable note without reading it when the size differs", async () => {
+    const s = session();
+    await render([s]);
+    const note = expectedAbsPath(s);
+    await fs.rm(indexPath(outDir));
+    await fs.chmod(note, 0o000);
+
+    const report = await render([{ ...s, body: "a longer body\n" }]);
+
+    expect(report.totalErrors).toBe(0);
+    expect(report.totalRendered).toBe(1);
+    expect(await fs.readFile(note, "utf8")).toContain("a longer body");
   });
 
   it("--force rewrites a damaged note", async () => {

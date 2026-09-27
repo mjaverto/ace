@@ -12,6 +12,7 @@ import {
   saveIndex,
   pruneLegacyEntries,
   outputUnchanged,
+  indexPath,
   stateDir,
   StateError,
   type IndexState,
@@ -130,6 +131,14 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
 
   const gate = createGate(concurrency);
 
+  // Normalize sourceFilter to a string[] (empty = no filter)
+  const filterNames: string[] =
+    sourceFilter === undefined
+      ? []
+      : Array.isArray(sourceFilter)
+        ? sourceFilter
+        : [sourceFilter];
+
   // Load index state if needed
   let indexState: IndexState = {};
   if (strategy === "index") {
@@ -138,7 +147,18 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
     } catch (err) {
       // `--force` is the documented recovery path for a broken index.
       if (!force || !(err instanceof StateError)) throw err;
+      if (filterNames.length > 0) {
+        throw new StateError(
+          err.problem,
+          "--force can only rebuild the index on a run without --source (otherwise other sources' entries would be dropped)."
+        );
+      }
       logger.warn(`[runRender] --force: ignoring unreadable index; it will be rebuilt (${err.problem})`);
+    }
+    if (Object.keys(indexState).length === 0 && (await fs.readdir(outputRoot).catch(() => [])).length > 0) {
+      logger.warn(
+        `[runRender] no index at ${indexPath(outputRoot)}; every existing note will be compared against disk`
+      );
     }
   }
 
@@ -153,14 +173,6 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
 
   // Owner map for output paths, shared across all sources in this run.
   const claims = new OutputPathRegistry(trackedOutPaths);
-
-  // Normalize sourceFilter to a string[] (empty = no filter)
-  const filterNames: string[] =
-    sourceFilter === undefined
-      ? []
-      : Array.isArray(sourceFilter)
-        ? sourceFilter
-        : [sourceFilter];
 
   // Resolve sources
   const allSources = registry.list();
@@ -343,10 +355,32 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
           }
         }
 
+        // -- Unchanged check (read-only, so dry-run reports it too) ---------
+        // Untouched when identical: a rewrite differing only in `aceRenderedAt`
+        // still makes cloud-sync clients re-upload the note (issue #14).
+        const fullContent = serializeFrontmatter(frontmatter) + cleanMarkdown.text;
+        const hash = contentHash(fullContent);
+        let written: boolean;
+        try {
+          written = !(await outputUnchanged(absOutPath, fullContent, hash, force ? undefined : previousEntry));
+        } catch (err) {
+          // Unreadable existing note: leave it and its index entry alone; retried next run.
+          const errMsg = err instanceof Error ? err.message : String(err);
+          logger.warn(`[runRender] ${errMsg}`);
+          report.errors.push({ id: handle.id, error: errMsg });
+          report.entries.push({ outPath: absOutPath, status: "error", error: errMsg });
+          return;
+        }
+
         if (dryRun) {
-          report.rendered++;
-          report.entries.push({ outPath: absOutPath, status: "rendered" });
-          logger.info(`[dry-run] would write: ${absOutPath}`);
+          if (written) {
+            report.rendered++;
+            report.entries.push({ outPath: absOutPath, status: "rendered" });
+            logger.info(`[dry-run] would write: ${absOutPath}`);
+          } else {
+            report.unchanged++;
+            report.entries.push({ outPath: absOutPath, status: "skipped" });
+          }
           if (previousOutPath !== undefined && previousOutPath !== absOutPath) {
             logger.info(`[dry-run] would relocate: ${previousOutPath} -> ${absOutPath}`);
           }
@@ -354,15 +388,9 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
         }
 
         // -- Write ----------------------------------------------------------
-        const fullContent = serializeFrontmatter(frontmatter) + cleanMarkdown.text;
-        const hash = contentHash(fullContent);
-        // Untouched when identical: a rewrite differing only in `aceRenderedAt`
-        // still makes cloud-sync clients re-upload the note (issue #14).
-        let written = false;
         try {
-          if (!(await outputUnchanged(absOutPath, hash, force ? undefined : previousEntry))) {
+          if (written) {
             await atomicWrite(absOutPath, fullContent, { tmpDir: path.join(stateDir(), "tmp") });
-            written = true;
           }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);

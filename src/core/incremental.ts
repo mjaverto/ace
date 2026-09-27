@@ -53,19 +53,22 @@ export function indexPath(outputRoot: string): string {
 
 /** The index exists but cannot be trusted; rendering must not proceed on a guess. */
 export class StateError extends Error {
-  /** One-line problem statement without remediation — for callers that already recover (`--force`). */
-  readonly problem: string;
-
-  constructor(file: string, cause: unknown) {
-    const problem = `cannot read index ${file}: ${cause instanceof Error ? cause.message : String(cause)}`;
-    super(
-      `${problem}\n` +
-        `If it is a cloud-only (evicted) placeholder, download it (open/cat the file) and rerun. ` +
-        `Otherwise fix or delete it, or rerun with --force; either re-checks every note against disk.`
-    );
+  /**
+   * @param problem One-line statement without remediation — for callers that
+   *   recover (`--force`) or re-throw with different advice.
+   */
+  constructor(
+    readonly problem: string,
+    remedy = "If it is a cloud-only (evicted) placeholder, download it (open/cat the file) and rerun. " +
+      "Otherwise fix or delete it, or rerun with --force; either re-checks every note against disk."
+  ) {
+    super(`${problem}\n${remedy}`);
     this.name = "StateError";
-    this.problem = problem;
   }
+}
+
+function unreadable(file: string, cause: unknown): StateError {
+  return new StateError(`cannot read index ${file}: ${cause instanceof Error ? cause.message : String(cause)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,16 +164,16 @@ export async function loadIndex(outputRoot: string): Promise<IndexState> {
       raw = await fs.readFile(file, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw new StateError(file, err);
+      throw unreadable(file, err);
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch (err) {
-      throw new StateError(file, err);
+      throw unreadable(file, err);
     }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new StateError(file, "not a JSON object");
+      throw unreadable(file, "not a JSON object");
     }
     return parsed as IndexState;
   }
@@ -200,23 +203,39 @@ export async function saveIndex(
 // ---------------------------------------------------------------------------
 
 /**
- * True when `dest` already holds content with hash `hash`, so writing would be
- * a byte-for-byte no-op apart from `aceRenderedAt`. Trusts the index entry when
- * it recorded this exact path + hash and the file still exists; otherwise reads
- * and hashes the file. Any read failure → false (write, to be safe).
+ * True when `dest` already holds `content` (hash `hash`), so writing would be a
+ * no-op apart from `aceRenderedAt`. Missing `dest` → false. Trusts the index
+ * entry when it recorded this exact path + hash. A size mismatch → false without
+ * reading (the ISO stamp is fixed-width, and cloud-only placeholders keep their
+ * logical size, so no download is triggered). Otherwise reads and hashes `dest`.
+ *
+ * Never turns a failure into a write: a stat/read error other than ENOENT
+ * throws, so the caller leaves an unreadable (e.g. evicted) note alone.
  */
 export async function outputUnchanged(
   dest: string,
+  content: string,
   hash: string,
   entry: IndexEntry | undefined
 ): Promise<boolean> {
+  let size: number;
   try {
-    if (entry?.contentHash === hash && entry.outPath === dest) {
-      await fs.stat(dest);
-      return true;
-    }
-    return contentHash(await fs.readFile(dest, "utf8")) === hash;
-  } catch {
-    return false;
+    size = (await fs.stat(dest)).size;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
   }
+  if (entry?.contentHash === hash && entry.outPath === dest) return true;
+  if (size !== Buffer.byteLength(content)) return false;
+  let existing: string;
+  try {
+    existing = await fs.readFile(dest, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error(
+      `existing note ${dest} could not be read for comparison (maybe a cloud-only placeholder); ` +
+        `left untouched, will retry next run: ${(err as Error).message}`
+    );
+  }
+  return contentHash(existing) === hash;
 }

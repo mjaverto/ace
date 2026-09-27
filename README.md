@@ -199,7 +199,7 @@ The human summary reads `rendered=N skipped=N errors=N unchanged=N`. `unchanged`
   opencode/<project-slug>/<session_id>.md
 ```
 
-Nothing but notes is written under the output root: the `index` state and atomic-write temp files live in `${XDG_STATE_HOME:-~/.local/state}/ace/` (`index-<hash of output root>.json`, `tmp/`). A legacy `<output>/.ace.state.json` from older versions is read once and deleted after the next successful run.
+`ace render` writes only notes under the output root: the `index` state and atomic-write temp files live in `${XDG_STATE_HOME:-~/.local/state}/ace/` (`index-<hash of output root>.json`, `tmp/`). A legacy `<output>/.ace.state.json` from older versions is read once and deleted after the next successful run. Exceptions: if staging in the state dir fails or the output is on a different filesystem, temp files are staged next to the note (and removed on failure); `ace doctor` writes and removes a short-lived `.ace-doctor-probe-*` file in the output root.
 
 Top-level dir is the source `name`, so QMD-style indexers and `grep -r` scopes filter trivially.
 
