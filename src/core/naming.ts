@@ -275,3 +275,98 @@ export function rawRelPathFor(id: string, roots: readonly string[]): string {
 
   return (best ?? id).split("\\").join("/");
 }
+
+// ---------------------------------------------------------------------------
+// Output path registry — collision resolution + rename safety
+// ---------------------------------------------------------------------------
+
+export interface ResolveRequest {
+  outputRoot: string;
+  /** Undisambiguated relative path from `buildRelPath`. */
+  bareRelPath: string;
+  /** Raw source path relative to its root — the disambiguator hash input. */
+  rawRelPath: string;
+  /** Identity claiming the path — the index `stateKey`. */
+  owner: string;
+  /** Absolute path this identity wrote last run, if any. */
+  previous?: string;
+}
+
+/**
+ * Run-scoped owner map for output paths.
+ *
+ * Every path this run writes *or deletes* must first be claimed here. Claiming
+ * is a synchronous check-and-set, so no two tasks can end up holding the same
+ * path no matter how their awaits interleave, and a relocation's stale-delete
+ * can never remove a file another task has claimed (and therefore may be about
+ * to write).
+ *
+ * Ownership carried over from previous runs comes from the index (`outPath` per
+ * identity), never from the filesystem: an identity that is skipped this run
+ * still owns its note, while a lost index must not make every session mistake
+ * its own output for a stranger's and duplicate the entire tree.
+ */
+export class OutputPathRegistry {
+  private readonly owners = new Map<string, string>();
+
+  /**
+   * @param tracked `outPath` → owning `stateKey`, from the loaded index. Paths
+   *   in here belong to their identity for the whole run, even a relocated one
+   *   (its freed path becomes available again on the next run).
+   */
+  constructor(private readonly tracked: ReadonlyMap<string, string> = new Map()) {}
+
+  /** Synchronous, atomic. True when `owner` holds `absPath` afterwards. */
+  claim(absPath: string, owner: string): boolean {
+    const current = this.owners.get(absPath);
+    if (current === undefined) {
+      this.owners.set(absPath, owner);
+      return true;
+    }
+    return current === owner;
+  }
+
+  ownerOf(absPath: string): string | undefined {
+    return this.owners.get(absPath);
+  }
+
+  /**
+   * Pick and claim the output path for one rendered session.
+   *
+   * Preference order: the path this identity already owns (stability across
+   * runs), then the bare path, then progressively wider disambiguators derived
+   * from the raw source path.
+   */
+  resolve(req: ResolveRequest): string {
+    const { outputRoot, bareRelPath, rawRelPath, owner, previous } = req;
+
+    const candidates = [
+      path.join(outputRoot, bareRelPath),
+      path.join(outputRoot, disambiguateRelPath(bareRelPath, rawRelPath, 4)),
+      path.join(outputRoot, disambiguateRelPath(bareRelPath, rawRelPath, 8)),
+      path.join(outputRoot, disambiguateRelPath(bareRelPath, rawRelPath, 16)),
+    ];
+
+    const held = previous === undefined ? -1 : candidates.indexOf(previous);
+    const order =
+      held > 0 ? [candidates[held]!, ...candidates.filter((_, i) => i !== held)] : candidates;
+
+    for (const candidate of order) {
+      const claimedBy = this.owners.get(candidate);
+      if (claimedBy !== undefined) {
+        if (claimedBy === owner) return candidate;
+        continue; // another identity holds it this run
+      }
+      const trackedBy = this.tracked.get(candidate);
+      if (trackedBy !== undefined && trackedBy !== owner) {
+        continue; // another identity's note from a previous run lives here
+      }
+      if (this.claim(candidate, owner)) return candidate;
+    }
+
+    throw new Error(
+      `[runRender] no free output path for "${owner}" (base "${bareRelPath}") — ` +
+        `all disambiguated candidates are claimed`
+    );
+  }
+}

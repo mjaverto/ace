@@ -11,13 +11,16 @@ import {
   loadIndex,
   saveIndex,
   pruneLegacyEntries,
+  outputUnchanged,
+  stateDir,
+  StateError,
   type IndexState,
   type IndexEntry,
 } from "./incremental.js";
 import { atomicWrite, setSourceMtime } from "./atomic-write.js";
-import { buildRelPath, disambiguateRelPath, rawRelPathFor } from "./naming.js";
+import { buildRelPath, OutputPathRegistry, rawRelPathFor } from "./naming.js";
 import { sanitizeFrontmatter, sanitizeMarkdown } from "./redact.js";
-import { serializeFrontmatter } from "../frontmatter.js";
+import { contentHash, serializeFrontmatter } from "../frontmatter.js";
 import { expandHome } from "../shared/util.js";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +37,8 @@ export interface SourceReport {
   sourceName: string;
   rendered: number;
   skipped: number;
+  /** Rendered, but byte-identical to the existing note (ignoring `aceRenderedAt`) — not written. */
+  unchanged: number;
   errors: Array<{ id: string; error: string }>;
   entries: SourceReportEntry[];
 }
@@ -42,6 +47,7 @@ export interface RenderReport {
   sources: SourceReport[];
   totalRendered: number;
   totalSkipped: number;
+  totalUnchanged: number;
   totalErrors: number;
   durationMs: number;
 }
@@ -99,101 +105,6 @@ function createGate(limit: number) {
 }
 
 // ---------------------------------------------------------------------------
-// Output path registry — collision resolution + rename safety
-// ---------------------------------------------------------------------------
-
-interface ResolveRequest {
-  outputRoot: string;
-  /** Undisambiguated relative path from `buildRelPath`. */
-  bareRelPath: string;
-  /** Raw source path relative to its root — the disambiguator hash input. */
-  rawRelPath: string;
-  /** Identity claiming the path — the index `stateKey`. */
-  owner: string;
-  /** Absolute path this identity wrote last run, if any. */
-  previous?: string;
-}
-
-/**
- * Run-scoped owner map for output paths.
- *
- * Every path this run writes *or deletes* must first be claimed here. Claiming
- * is a synchronous check-and-set, so no two tasks can end up holding the same
- * path no matter how their awaits interleave, and a relocation's stale-delete
- * can never remove a file another task has claimed (and therefore may be about
- * to write).
- *
- * Ownership carried over from previous runs comes from the index (`outPath` per
- * identity), never from the filesystem: an identity that is skipped this run
- * still owns its note, while a lost index must not make every session mistake
- * its own output for a stranger's and duplicate the entire tree.
- */
-class OutputPathRegistry {
-  private readonly owners = new Map<string, string>();
-
-  /**
-   * @param tracked `outPath` → owning `stateKey`, from the loaded index. Paths
-   *   in here belong to their identity for the whole run, even a relocated one
-   *   (its freed path becomes available again on the next run).
-   */
-  constructor(private readonly tracked: ReadonlyMap<string, string> = new Map()) {}
-
-  /** Synchronous, atomic. True when `owner` holds `absPath` afterwards. */
-  claim(absPath: string, owner: string): boolean {
-    const current = this.owners.get(absPath);
-    if (current === undefined) {
-      this.owners.set(absPath, owner);
-      return true;
-    }
-    return current === owner;
-  }
-
-  ownerOf(absPath: string): string | undefined {
-    return this.owners.get(absPath);
-  }
-
-  /**
-   * Pick and claim the output path for one rendered session.
-   *
-   * Preference order: the path this identity already owns (stability across
-   * runs), then the bare path, then progressively wider disambiguators derived
-   * from the raw source path.
-   */
-  resolve(req: ResolveRequest): string {
-    const { outputRoot, bareRelPath, rawRelPath, owner, previous } = req;
-
-    const candidates = [
-      path.join(outputRoot, bareRelPath),
-      path.join(outputRoot, disambiguateRelPath(bareRelPath, rawRelPath, 4)),
-      path.join(outputRoot, disambiguateRelPath(bareRelPath, rawRelPath, 8)),
-      path.join(outputRoot, disambiguateRelPath(bareRelPath, rawRelPath, 16)),
-    ];
-
-    const held = previous === undefined ? -1 : candidates.indexOf(previous);
-    const order =
-      held > 0 ? [candidates[held]!, ...candidates.filter((_, i) => i !== held)] : candidates;
-
-    for (const candidate of order) {
-      const claimedBy = this.owners.get(candidate);
-      if (claimedBy !== undefined) {
-        if (claimedBy === owner) return candidate;
-        continue; // another identity holds it this run
-      }
-      const trackedBy = this.tracked.get(candidate);
-      if (trackedBy !== undefined && trackedBy !== owner) {
-        continue; // another identity's note from a previous run lives here
-      }
-      if (this.claim(candidate, owner)) return candidate;
-    }
-
-    throw new Error(
-      `[runRender] no free output path for "${owner}" (base "${bareRelPath}") — ` +
-        `all disambiguated candidates are claimed`
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
 // runRender
 // ---------------------------------------------------------------------------
 
@@ -222,7 +133,13 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
   // Load index state if needed
   let indexState: IndexState = {};
   if (strategy === "index") {
-    indexState = await loadIndex(outputRoot);
+    try {
+      indexState = await loadIndex(outputRoot);
+    } catch (err) {
+      // `--force` is the documented recovery path for a broken index.
+      if (!force || !(err instanceof StateError)) throw err;
+      logger.warn(`[runRender] ignoring unreadable index (--force): ${err.message}`);
+    }
   }
 
   // Output paths already owned by an identity, so a session that is skipped
@@ -268,7 +185,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
     const roots = sourceConfig.roots?.length ? sourceConfig.roots : source.defaultRoots(process.env["HOME"] ?? "~");
     const exclude = sourceConfig.exclude ?? [];
 
-    const report: SourceReport = { sourceName: source.name, rendered: 0, skipped: 0, errors: [], entries: [] };
+    const report: SourceReport = { sourceName: source.name, rendered: 0, skipped: 0, unchanged: 0, errors: [], entries: [] };
     reports.push(report);
 
     const ctx = {
@@ -438,9 +355,15 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
 
         // -- Write ----------------------------------------------------------
         const fullContent = serializeFrontmatter(frontmatter) + cleanMarkdown.text;
-
+        const hash = contentHash(fullContent);
+        // Untouched when identical: a rewrite differing only in `aceRenderedAt`
+        // still makes cloud-sync clients re-upload the note (issue #14).
+        let written = false;
         try {
-          await atomicWrite(absOutPath, fullContent);
+          if (!(await outputUnchanged(absOutPath, hash, previousEntry))) {
+            await atomicWrite(absOutPath, fullContent, { tmpDir: path.join(stateDir(), "tmp") });
+            written = true;
+          }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           logger.error(`[runRender] atomicWrite failed for "${absOutPath}":`, err);
@@ -450,7 +373,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
         }
 
         // Set output mtime to match source
-        if (strategy === "mtime") {
+        if (written && strategy === "mtime") {
           await setSourceMtime(absOutPath, result.sourceMtimeMs);
         }
 
@@ -481,6 +404,7 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
             srcSizeBytes: result.sourceSizeBytes,
             renderedAt: new Date().toISOString(),
             outPath: absOutPath,
+            contentHash: hash,
           };
           if (result.sourceSha256) {
             entry.srcSha256 = result.sourceSha256;
@@ -488,6 +412,12 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
           indexState[stateKey] = entry;
         }
 
+        if (!written) {
+          report.unchanged++;
+          report.entries.push({ outPath: absOutPath, status: "skipped" });
+          logger.debug(`[runRender] unchanged: ${absOutPath}`);
+          return;
+        }
         report.rendered++;
         report.entries.push({ outPath: absOutPath, status: "rendered" });
         logger.info(`[runRender] rendered: ${absOutPath}`);
@@ -512,12 +442,14 @@ export async function runRender(opts: RunRenderOptions): Promise<RenderReport> {
 
   const totalRendered = reports.reduce((n, r) => n + r.rendered, 0);
   const totalSkipped = reports.reduce((n, r) => n + r.skipped, 0);
+  const totalUnchanged = reports.reduce((n, r) => n + r.unchanged, 0);
   const totalErrors = reports.reduce((n, r) => n + r.errors.length, 0);
 
   return {
     sources: reports,
     totalRendered,
     totalSkipped,
+    totalUnchanged,
     totalErrors,
     durationMs: Date.now() - startTime,
   };

@@ -285,3 +285,30 @@ describe("ace render --json + idempotency", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Unreadable index → exit 5, nothing written (issue #14)
+// ---------------------------------------------------------------------------
+
+describe("ace render with a corrupt index", () => {
+  it("exits 5 before touching any output", async () => {
+    const out = path.join(tmpDir, "index-out");
+    const args = ["render", "--config", configPath, "--strategy", "index", "--out", out];
+    expect((await ace(args)).exitCode).toBe(0);
+
+    const { indexPath } = await import("../../src/core/incremental.js");
+    await fs.writeFile(indexPath(out), "{truncated", "utf8");
+    const snapshot = async (): Promise<string[]> => {
+      const files = (await fs.readdir(out, { recursive: true })).map(String).sort();
+      return Promise.all(files.map(async (f) => `${f}:${(await fs.stat(path.join(out, f))).mtimeMs}`));
+    };
+    const before = await snapshot();
+
+    const { exitCode, stderr } = await ace([...args, "--json"]);
+
+    expect(exitCode).toBe(5);
+    expect(stderr).toContain(indexPath(out));
+    expect(stderr).toContain("--force");
+    expect(await snapshot()).toEqual(before);
+  });
+});

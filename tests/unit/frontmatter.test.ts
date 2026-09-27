@@ -1,7 +1,7 @@
 // tests/unit/frontmatter.test.ts — unit tests for serializeFrontmatter
 
 import { describe, it, expect } from "vitest";
-import { serializeFrontmatter } from "../../src/frontmatter.js";
+import { contentHash, serializeFrontmatter } from "../../src/frontmatter.js";
 
 describe("serializeFrontmatter", () => {
   it("strips top-level null values", () => {
@@ -73,5 +73,22 @@ describe("serializeFrontmatter", () => {
     const result = serializeFrontmatter({ source: "claude" });
     expect(result).toMatch(/^---\n/);
     expect(result).toMatch(/\n---\n$/);
+  });
+});
+
+describe("contentHash", () => {
+  const note = (stamp: string, body: string): string =>
+    `---\nsource: claude\naceRenderedAt: ${stamp}\ntitle: t\n---\n# t\n\n${body}\n`;
+
+  it("ignores the frontmatter aceRenderedAt stamp", () => {
+    expect(contentHash(note("2026-01-01T00:00:00Z", "x"))).toBe(
+      contentHash(note("2026-09-27T12:34:56Z", "x"))
+    );
+  });
+
+  it("does not normalize aceRenderedAt: lines in the body", () => {
+    expect(contentHash(note("s", "aceRenderedAt: 1"))).not.toBe(
+      contentHash(note("s", "aceRenderedAt: 2"))
+    );
   });
 });

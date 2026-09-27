@@ -43,16 +43,23 @@ export async function sweepTmp(dir: string): Promise<void> {
 export interface AtomicWriteOptions {
   /** If true, skip fsync (useful in tests). Default: false */
   noFsync?: boolean;
+  /**
+   * Stage the temp file here instead of next to `absPath`, so sync clients
+   * watching the destination never see it. Falls back to the destination dir
+   * when a rename across the two would cross filesystems (EXDEV).
+   */
+  tmpDir?: string;
 }
 
 /**
  * Write `contents` to `absPath` atomically.
  *
- * 1. Writes to `${absPath}.tmp-${pid}-${rand}` in the same directory.
+ * 1. Writes a temp file — in `opts.tmpDir` if given, else next to `absPath`.
  * 2. fsyncs the temp file (best-effort; errors are swallowed).
- * 3. Renames the temp file to `absPath`.
+ * 3. Renames the temp file to `absPath` (retrying from the destination dir on EXDEV).
  *
- * Also calls `sweepTmp` on the directory once per process run.
+ * The temp file is removed on any failure. Also calls `sweepTmp` on the temp
+ * dir once per process run.
  */
 export async function atomicWrite(
   absPath: string,
@@ -61,28 +68,50 @@ export async function atomicWrite(
 ): Promise<void> {
   const dir = path.dirname(absPath);
   await fs.mkdir(dir, { recursive: true });
-
-  // Sweep stale tmps once per dir per run
-  await sweepTmp(dir);
-
-  const rand = randomBytes(4).toString("hex");
-  const tmpPath = `${absPath}.tmp-${process.pid}-${rand}`;
-
-  await fs.writeFile(tmpPath, contents, { encoding: "utf8" });
-
-  if (!opts.noFsync) {
-    let fd: import("node:fs/promises").FileHandle | undefined;
+  if (opts.tmpDir !== undefined) {
+    await fs.mkdir(opts.tmpDir, { recursive: true, mode: 0o700 });
     try {
-      fd = await fs.open(tmpPath, "r+");
-      await fd.datasync();
-    } catch {
-      // fsync is best-effort — cloud FSes and some network mounts ignore it
-    } finally {
-      await fd?.close().catch(() => undefined);
+      await writeViaTmp(absPath, contents, opts.tmpDir, opts.noFsync);
+      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
     }
   }
+  await writeViaTmp(absPath, contents, dir, opts.noFsync);
+}
 
-  await fs.rename(tmpPath, absPath);
+async function writeViaTmp(
+  absPath: string,
+  contents: string,
+  tmpDir: string,
+  noFsync = false
+): Promise<void> {
+  // Sweep stale tmps once per dir per run
+  await sweepTmp(tmpDir);
+
+  const rand = randomBytes(4).toString("hex");
+  const tmpPath = path.join(tmpDir, `.tmp-${path.basename(absPath)}-${process.pid}-${rand}`);
+
+  try {
+    await fs.writeFile(tmpPath, contents, { encoding: "utf8" });
+
+    if (!noFsync) {
+      let fd: import("node:fs/promises").FileHandle | undefined;
+      try {
+        fd = await fs.open(tmpPath, "r+");
+        await fd.datasync();
+      } catch {
+        // fsync is best-effort — cloud FSes and some network mounts ignore it
+      } finally {
+        await fd?.close().catch(() => undefined);
+      }
+    }
+
+    await fs.rename(tmpPath, absPath);
+  } catch (err) {
+    await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+    throw err;
+  }
 }
 
 /**

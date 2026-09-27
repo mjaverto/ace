@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runRender, type RenderReport } from "../../src/core/render.js";
-import { loadIndex } from "../../src/core/incremental.js";
+import { indexPath, loadIndex, StateError } from "../../src/core/incremental.js";
 import { buildRelPath, disambiguator, rawRelPathFor } from "../../src/core/naming.js";
 import { Registry } from "../../src/registry.js";
 import type { AceConfig } from "../../src/config/schema.js";
@@ -27,6 +27,8 @@ interface FakeSession {
   title: string;
   mtimeMs: number;
   sizeBytes: number;
+  /** Extra body text, to change rendered content without moving the note. */
+  body?: string;
 }
 
 const SOURCE_NAME = "faketool";
@@ -96,7 +98,7 @@ function fakeSource(sessions: FakeSession[]): AgentSource {
     async render(handle) {
       const session = handle.payload as FakeSession;
       return {
-        markdown: `# ${session.title}\n\nbody of ${session.file}\n`,
+        markdown: `# ${session.title}\n\nbody of ${session.file}\n${session.body ?? ""}`,
         frontmatter: frontmatterFor(session),
         sourceMtimeMs: session.mtimeMs,
         sourceSizeBytes: session.sizeBytes,
@@ -105,9 +107,9 @@ function fakeSource(sessions: FakeSession[]): AgentSource {
   };
 }
 
-function configFor(strategy: "mtime" | "index"): AceConfig {
+function configFor(strategy: "mtime" | "index", output = outDir): AceConfig {
   return {
-    output: outDir,
+    output,
     strategy,
     concurrency: 1,
     truncate: { toolOutput: 4000, toolInput: 4000 },
@@ -118,15 +120,16 @@ function configFor(strategy: "mtime" | "index"): AceConfig {
 
 async function render(
   sessions: FakeSession[],
-  opts: { strategy?: "mtime" | "index"; dryRun?: boolean } = {}
+  opts: { strategy?: "mtime" | "index"; dryRun?: boolean; force?: boolean; output?: string } = {}
 ): Promise<RenderReport> {
   const registry = new Registry();
   registry.register(fakeSource(sessions));
   return runRender({
-    config: configFor(opts.strategy ?? "index"),
+    config: configFor(opts.strategy ?? "index", opts.output),
     registry,
     logger,
     ...(opts.dryRun === undefined ? {} : { dryRun: opts.dryRun }),
+    ...(opts.force === undefined ? {} : { force: opts.force }),
   });
 }
 
@@ -328,11 +331,12 @@ describe("runRender — collision disambiguation", () => {
     const subagentPath = state[`${SOURCE_NAME}/${handleId(subagent)}`]?.outPath;
     expect(parentPath).not.toBe(subagentPath);
 
-    // Touch only the subagent; it must keep its disambiguated path.
+    // Touch only the subagent; it must keep its disambiguated path (content
+    // is identical, so it is re-rendered but not rewritten).
     const touched: FakeSession = { ...subagent, mtimeMs: subagent.mtimeMs + 1000 };
     const report = await render([parent, touched]);
 
-    expect(report.totalRendered).toBe(1);
+    expect(report.totalUnchanged).toBe(1);
     expect(report.totalSkipped).toBe(1);
 
     const after = await loadIndex(outDir);
@@ -371,11 +375,13 @@ describe("runRender — collision disambiguation", () => {
     expect(await countMd(outDir)).toBe(2);
 
     const before = new Set(Object.values(await loadIndex(outDir)).map((e) => e.outPath));
-    await fs.rm(path.join(outDir, ".ace.state.json"));
+    await fs.rm(indexPath(outDir));
 
     const report = await render([parent, subagent]);
 
-    expect(report.totalRendered).toBe(2);
+    // Re-rendered, but byte-identical → left untouched.
+    expect(report.totalRendered).toBe(0);
+    expect(report.totalUnchanged).toBe(2);
     expect(await countMd(outDir)).toBe(2);
     expect(new Set(Object.values(await loadIndex(outDir)).map((e) => e.outPath))).toEqual(before);
   });
@@ -424,6 +430,93 @@ describe("runRender — self-heal and migration", () => {
     expect(state[`${SOURCE_NAME}/${handleId(s)}`]?.outPath).toBe(expectedAbsPath(s));
     expect(logs.some((l) => l.includes("pruned 1 pre-layout index entry"))).toBe(true);
   });
+
+  it("migrates a legacy <out>/.ace.state.json without re-rendering", async () => {
+    const s = session();
+    await render([s]);
+    await fs.rename(indexPath(outDir), path.join(outDir, ".ace.state.json"));
+
+    const report = await render([s]);
+
+    expect(report.totalSkipped).toBe(1);
+    expect(report.totalRendered + report.totalUnchanged).toBe(0);
+    expect(await exists(path.join(outDir, ".ace.state.json"))).toBe(false);
+    expect(await exists(indexPath(outDir))).toBe(true);
+  });
+
+  it("keeps a separate index per output root", async () => {
+    const s = session();
+    await render([s]);
+    const otherOut = path.join(tmpDir, "other-out");
+
+    const report = await render([s], { output: otherOut });
+
+    expect(report.totalRendered).toBe(1);
+    expect(indexPath(otherOut)).not.toBe(indexPath(outDir));
+    expect(await exists(indexPath(otherOut))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unreadable index + unchanged writes (issue #14)
+// ---------------------------------------------------------------------------
+
+describe("runRender — state safety and unchanged writes", () => {
+  it.each([
+    ["corrupt JSON", async (p: string) => fs.writeFile(p, "{not json", "utf8")],
+    ["unreadable file (EISDIR)", async (p: string) => fs.mkdir(p)],
+  ])("aborts before writing anything on %s", async (_label, breakIndex) => {
+    const s = session();
+    await render([s]);
+    const note = expectedAbsPath(s);
+    const before = await fs.stat(note);
+    await fs.rm(indexPath(outDir));
+    await breakIndex(indexPath(outDir));
+
+    await expect(render([{ ...s, body: "changed" }])).rejects.toBeInstanceOf(StateError);
+    const after = await fs.stat(note);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(await fs.readFile(note, "utf8")).not.toContain("changed");
+  });
+
+  it("--force recovers from a corrupt index", async () => {
+    const s = session();
+    await render([s]);
+    await fs.writeFile(indexPath(outDir), "{not json", "utf8");
+
+    const report = await render([s], { force: true });
+
+    expect(report.totalErrors).toBe(0);
+    expect(Object.keys(await loadIndex(outDir))).toEqual([`${SOURCE_NAME}/${handleId(s)}`]);
+  });
+
+  it("does not rewrite unchanged notes under --force, but writes changed ones", async () => {
+    const s = session();
+    await render([s], { force: true });
+    const note = expectedAbsPath(s);
+    const before = await fs.stat(note);
+
+    const again = await render([s], { force: true });
+    expect(again.totalRendered).toBe(0);
+    expect(again.totalUnchanged).toBe(1);
+    expect(again.sources[0]?.entries[0]?.status).toBe("skipped");
+    const after = await fs.stat(note);
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+
+    const changed = await render([{ ...s, body: "new turn\n" }], { force: true });
+    expect(changed.totalRendered).toBe(1);
+    expect(await fs.readFile(note, "utf8")).toContain("new turn");
+  });
+
+  it("leaves no temp files or index in the output tree", async () => {
+    await render([session({ file: "a.jsonl" }), session({ file: "b.jsonl" })]);
+
+    const names = (await fs.readdir(outDir, { recursive: true })).map(String);
+    expect(names.filter((n) => path.basename(n).includes(".tmp-"))).toEqual([]);
+    expect(names).not.toContain(".ace.state.json");
+    expect(names.filter((n) => n.endsWith(".json"))).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -445,6 +538,6 @@ describe("runRender — mtime strategy", () => {
 
   it("writes no index file", async () => {
     await render([session()], { strategy: "mtime" });
-    expect(await exists(path.join(outDir, ".ace.state.json"))).toBe(false);
+    expect(await exists(indexPath(outDir))).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ export default defineConfig({
       "tests/unit/**/*.test.ts",
       "tests/integration/**/*.test.ts",
     ],
+    setupFiles: ["tests/helpers/isolate-state.ts"],
     passWithNoTests: true,
     // Integration tests spawn child processes — allow up to 30s per test.
     testTimeout: 30000,
